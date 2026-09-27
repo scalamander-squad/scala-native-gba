@@ -170,20 +170,70 @@ private[interflow] trait Visit { self: Interflow =>
     if (!shallDuplicate(orig, argtys)) orig
     else {
       val origargtys = argumentTypes(name)
-      val dupargtys = argtys.zip(origargtys).map {
-        case (argty, origty) =>
+      val used = usedParams(orig)
+      val chosen = argtys.zip(origargtys).zipWithIndex.map {
+        case ((argty, origty), idx) =>
+          // A parameter the body never reads gains nothing from a more
+          // precise type: keep the declared one, so that call sites that
+          // differ only there share one copy (e.g. a trait method that
+          // ignores `this`, called from a forwarder in every subclass).
+          if (!duplicateUnusedParams && !used(idx)) origty
           // Duplicate argument type should not be
           // less specific than the original declare type.
-          val tpe = if (!Sub.is(argty, origty)) origty else argty
+          else if (!Sub.is(argty, origty)) origty
+          else argty
+      }
+      if (!duplicateUnusedParams && chosen == origargtys) orig
+      else {
+        val dupargtys = chosen.map { tpe =>
           // Lift Unit to BoxedUnit, only in that form it can be passed as a function argument
           // It would be better to eliminate void arguments, but currently generates lots of problmes
           if (tpe == nir.Type.Unit) nir.Rt.BoxedUnit
           else tpe
+        }
+        val nir.Global.Member(top, sig) = orig
+        nir.Global.Member(top, nir.Sig.Duplicate(sig, dupargtys))
       }
-      val nir.Global.Member(top, sig) = orig
-      nir.Global.Member(top, nir.Sig.Duplicate(sig, dupargtys))
     }
   }
+
+  /** `-Dscalanative.interflow.duplicateUnusedParams=true` restores upstream's
+   *  rule: specialise on every argument type, read or not.
+   */
+  private lazy val duplicateUnusedParams: Boolean =
+    java.lang.Boolean.getBoolean("scalanative.interflow.duplicateUnusedParams")
+
+  private val usedParamsCache =
+    scala.collection.concurrent.TrieMap.empty[nir.Global.Member, Int => Boolean]
+
+  /** Which parameters of the original (unoptimised) body are read anywhere. */
+  private def usedParams(orig: nir.Global.Member): Int => Boolean =
+    usedParamsCache.getOrElseUpdate(
+      orig, {
+        val defn = getOriginal(orig)
+        defn.insts.headOption match {
+          case Some(nir.Inst.Label(_, params)) =>
+            val ids = params.map(_.id)
+            val seen = scala.collection.mutable.HashSet.empty[nir.Local]
+            val traverse = new nir.Traverse {
+              override def onVal(value: nir.Val): Unit = {
+                value match {
+                  case nir.Val.Local(id, _) => seen += id
+                  case _                    => ()
+                }
+                super.onVal(value)
+              }
+            }
+            traverse.onInsts(defn.insts)
+            val usedSet = ids.zipWithIndex.collect {
+              case (id, idx) if seen.contains(id) => idx
+            }.toSet
+            (idx: Int) => usedSet.contains(idx)
+          case _ =>
+            (_: Int) => true
+        }
+      }
+    )
 
   def argumentTypes(name: nir.Global.Member): Seq[nir.Type] = name match {
     case nir.Global.Member(_, sig) if sig.isDuplicate =>
