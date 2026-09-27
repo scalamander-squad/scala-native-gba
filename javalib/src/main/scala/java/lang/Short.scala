@@ -228,10 +228,12 @@ object Short {
   @inline def toUnsignedLong(x: scala.Short): scala.Long =
     shortToULong(x)
 
-  private val cache = new Array[java.lang.Short](256)
+  import ShortCache.cache   // was an eager field of this object: 1 KB allocated by anything touching java.lang.Short
 
   @inline def valueOf(shortValue: scala.Short): Short = {
-    if (shortValue.toByte.toShort != shortValue) {
+    if (Freestanding.isFreestanding) {
+      new Short(shortValue)
+    } else if (shortValue.toByte.toShort != shortValue) {
       new Short(shortValue)
     } else {
       val idx = shortValue + 128
