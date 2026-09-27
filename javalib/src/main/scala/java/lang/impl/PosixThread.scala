@@ -36,9 +36,13 @@ private[java] class PosixThread(
     osDefaultStackSize = PosixThread.defaultOSStackSize
   )
 
-  private val _state = new scala.Array[scala.Byte](StateSize)
+  // Single-threaded builds never use the pthread state: they must not call
+  // the pthread type-size externs either (freestanding targets have none).
+  private val _state =
+    if (isMultithreadingEnabled) new scala.Array[scala.Byte](StateSize)
+    else null
 
-  private def stateAt[T](offset: Int): Ptr[T] =
+  @alwaysinline private def stateAt[T](offset: => Int): Ptr[T] =
     if (isMultithreadingEnabled) _state.at(offset).asInstanceOf[Ptr[T]]
     else null
 
@@ -393,15 +397,23 @@ private[java] class PosixThread(
 private[lang] object PosixThread extends NativeThread.Companion {
   override type Impl = PosixThread
 
-  private val _state = new scala.Array[scala.Byte](CompanionStateSize)
-  private val conditionRelativeCondAttr =
-    _state
-      .at(ConditionRelativeAttrOffset)
-      .asInstanceOf[Ptr[pthread_condattr_t]]
-  private val mutexAttr =
-    _state
-      .at(MutexAttrOffset)
-      .asInstanceOf[Ptr[pthread_mutexattr_t]]
+  // As in the class: no pthread state (or type sizes) in single-threaded builds
+  private val _state =
+    if (isMultithreadingEnabled)
+      new scala.Array[scala.Byte](CompanionStateSize)
+    else null
+  private val conditionRelativeCondAttr: Ptr[pthread_condattr_t] =
+    if (isMultithreadingEnabled)
+      _state
+        .at(ConditionRelativeAttrOffset)
+        .asInstanceOf[Ptr[pthread_condattr_t]]
+    else null
+  private val mutexAttr: Ptr[pthread_mutexattr_t] =
+    if (isMultithreadingEnabled)
+      _state
+        .at(MutexAttrOffset)
+        .asInstanceOf[Ptr[pthread_mutexattr_t]]
+    else null
 
   if (isMultithreadingEnabled) {
     checkStatus("relative-time conditions attrs init") {
