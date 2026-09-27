@@ -72,11 +72,11 @@ private[runtime] object MemoryLayout {
     @alwaysinline def StrideOffset = LengthOffset + IntSize
     @alwaysinline def ValuesOffset = StrideOffset + IntSize
 
-    /** Offset of the first element of an array whose element type has the
-     *  given ABI alignment (`alignmentOf[T]`). The array header is 12 bytes on
-     *  32-bit targets and LLVM places 8-byte aligned elements (Long/Double on
-     *  ARM, RISC-V, MIPS, wasm32; not on 32-bit x86) at offset 16, matching
-     *  the `{ ArrayHeader, [0 x i64] }` struct used by codegen for
+    /** Offset of the first element of an array whose element type has the given
+     *  ABI alignment (`alignmentOf[T]`). The array header is 12 bytes on 32-bit
+     *  targets and LLVM places 8-byte aligned elements (Long/Double on ARM,
+     *  RISC-V, MIPS, wasm32; not on 32-bit x86) at offset 16, matching the
+     *  `{ ArrayHeader, [0 x i64] }` struct used by codegen for
      *  `Op.Arrayload`/`Op.Arraystore`. Always 16 on 64-bit targets.
      */
     @alwaysinline def valuesOffsetFor(elementAlignment: Int): Int =

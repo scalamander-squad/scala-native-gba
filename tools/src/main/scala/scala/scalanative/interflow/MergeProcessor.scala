@@ -33,14 +33,15 @@ private[interflow] final class MergeProcessor(
 
   /** The values the processed body was entered with (the arguments of the
    *  inlined call). In inline mode they may be virtual objects owned by the
-   *  caller, which the caller keeps using after the call. */
+   *  caller, which the caller keeps using after the call.
+   */
   var entryArgs: Seq[nir.Val] = Seq.empty
 
-  /** Locals of `insts` that are live on entry to each label (block
-   *  parameters excluded), following normal and exceptional successors.
-   *  Used to decide which values an exception handler can observe (see
-   *  Eval.run: only those are escaped before an instruction that may unwind
-   *  to it). */
+  /** Locals of `insts` that are live on entry to each label (block parameters
+   *  excluded), following normal and exceptional successors. Used to decide
+   *  which values an exception handler can observe (see Eval.run: only those
+   *  are escaped before an instruction that may unwind to it).
+   */
   lazy val liveIn: collection.Map[nir.Local, Set[nir.Local]] =
     MergeProcessor.liveness(insts)
   val todo = mutable.SortedSet.empty[nir.Local](using Ordering.by(offsets))
@@ -295,7 +296,9 @@ private[interflow] final class MergeProcessor(
         // would follow the throwing instruction): fall back to no-opt.
         states.foreach { s =>
           if (s.isUnwindSnapshot && s.emit.size > 0)
-            throw BailOut("try-catch: materialization needed on exceptional edge")
+            throw BailOut(
+              "try-catch: materialization needed on exceptional edge"
+            )
         }
 
         // Wrap up anre rturn a new merge state
@@ -638,11 +641,12 @@ private[interflow] object MergeProcessor {
     builder
   }
 
-  /** Live-in locals per label of a method body (standard backward
-   *  dataflow). Uses are every `Val.Local` an instruction mentions; defs are
-   *  label parameters, `Let` ids and the exception locals of unwind edges.
-   *  Successors are the control-flow targets and the unwind handlers of
-   *  every instruction of the block. */
+  /** Live-in locals per label of a method body (standard backward dataflow).
+   *  Uses are every `Val.Local` an instruction mentions; defs are label
+   *  parameters, `Let` ids and the exception locals of unwind edges. Successors
+   *  are the control-flow targets and the unwind handlers of every instruction
+   *  of the block.
+   */
   def liveness(
       insts: Array[nir.Inst]
   ): collection.Map[nir.Local, Set[nir.Local]] = {
@@ -667,7 +671,7 @@ private[interflow] object MergeProcessor {
       case nir.Next.Unwind(exc, target) =>
         cur.defs += exc.id
         next(target)
-      case nir.Next.Label(id, _) => cur.succs += id
+      case nir.Next.Label(id, _)    => cur.succs += id
       case nir.Next.Case(_, target) => next(target)
       case _                        => ()
     }
@@ -678,14 +682,14 @@ private[interflow] object MergeProcessor {
           blks += cur
           params.foreach(p => cur.defs += p.id)
         case _ if cur == null => ()
-        case inst =>
+        case inst             =>
           new Uses(cur.uses).onInst(inst)
           inst match {
             case nir.Inst.Let(id, _, unwind) =>
               cur.defs += id
               next(unwind)
-            case nir.Inst.Jump(n)        => next(n)
-            case nir.Inst.If(_, t, e)    => next(t); next(e)
+            case nir.Inst.Jump(n)             => next(n)
+            case nir.Inst.If(_, t, e)         => next(t); next(e)
             case nir.Inst.Switch(_, d, cases) =>
               next(d); cases.foreach(next)
             case nir.Inst.Throw(_, unwind)    => next(unwind)

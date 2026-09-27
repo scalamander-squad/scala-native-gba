@@ -228,7 +228,7 @@ object Short {
   @inline def toUnsignedLong(x: scala.Short): scala.Long =
     shortToULong(x)
 
-  import ShortCache.cache   // was an eager field of this object: 1 KB allocated by anything touching java.lang.Short
+  import ShortCache.cache // was an eager field of this object: 1 KB allocated by anything touching java.lang.Short
 
   @inline def valueOf(shortValue: scala.Short): Short = {
     if (Freestanding.isFreestanding) {

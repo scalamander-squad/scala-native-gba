@@ -14,7 +14,11 @@ import scala.scalanative.nir
 class MemoryLayoutTest {
   import nir.Type._
 
-  private def platform(arch: String, is32Bit: Boolean, windows: Boolean = false) =
+  private def platform(
+      arch: String,
+      is32Bit: Boolean,
+      windows: Boolean = false
+  ) =
     PlatformInfo(
       targetTriple = None,
       targetsWindows = windows,
@@ -60,15 +64,24 @@ class MemoryLayoutTest {
     assertEquals(24L, armLayout.size)
     assertEquals(Seq(0L, 4L, 8L, 16L), armLayout.tys.map(_.offset))
     assertEquals(16L, MemoryLayout(dbl)(arm32).size)
-    assertEquals(16L, MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(arm32).size)
+    assertEquals(
+      16L,
+      MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(arm32).size
+    )
     // clang -target i386-linux-gnu: {ptr,i1,ptr,i64} = 20, {ptr,i8,double} = 16
     val x86Layout = MemoryLayout(tys)(x86)
     assertEquals(20L, x86Layout.size)
     assertEquals(Seq(0L, 4L, 8L, 12L), x86Layout.tys.map(_.offset))
-    assertEquals(12L, MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(x86).size)
+    assertEquals(
+      12L,
+      MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(x86).size
+    )
     // 64-bit unchanged: {ptr,i1,ptr,i64} = 32
     assertEquals(32L, MemoryLayout(tys)(x86_64).size)
-    assertEquals(16L, MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(x86_64).size)
+    assertEquals(
+      16L,
+      MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(x86_64).size
+    )
   }
 
   @Test def sizeOfLongArrayElementsUnchanged(): Unit = {

@@ -5,10 +5,10 @@ import scala.collection.mutable
 
 /** One object of a link-time evaluated object graph.
  *
- *  Either a regular object (`fields`, keyed by field name, values are
- *  canonical `nir.Val`s, `nir.Val.String` literals or `nir.Val.Virtual(key)`
- *  references to other objects of the graph) or an array (`arrayElem` is the
- *  element type and `elems` the values).
+ *  Either a regular object (`fields`, keyed by field name, values are canonical
+ *  `nir.Val`s, `nir.Val.String` literals or `nir.Val.Virtual(key)` references
+ *  to other objects of the graph) or an array (`arrayElem` is the element type
+ *  and `elems` the values).
  */
 final class RomObject(
     val key: Long,
@@ -18,6 +18,7 @@ final class RomObject(
   val fields = mutable.LinkedHashMap.empty[nir.Global.Member, nir.Val]
   var elems: Array[nir.Val] = null
   var moduleOf: Option[nir.Global.Top] = None
+
   /** The instance of a module whose initialiser was evaluated but that must
    *  stay a run-time module (mutable state): its scalar fields are known, but
    *  ROM graphs may not reference it.
@@ -41,8 +42,8 @@ final class RomData {
   /** Every object reachable from a ROM module instance, in a deterministic
    *  order, paired with the module through which it was first reached.
    */
-  /** The global that codegen emits for each object: `<module>.instance` for module instances,
-   *  `<first owner module>.rom<key>` otherwise.
+  /** The global that codegen emits for each object: `<module>.instance` for
+   *  module instances, `<first owner module>.rom<key>` otherwise.
    */
   lazy val globalName: Map[Long, nir.Global.Member] =
     reachable.map {
@@ -54,7 +55,8 @@ final class RomData {
     }.toMap
   lazy val byGlobal: Map[nir.Global, Long] = globalName.map(_.swap)
 
-  /** The static type of a reference to the constant of `key` (exact, non-null). */
+  /** The static type of a reference to the constant of `key` (exact, non-null).
+   */
   def refType(key: Long): nir.Type = {
     val obj = objects(key)
     obj.arrayElem match {
@@ -84,8 +86,9 @@ final class RomData {
 object RomData {
   val empty: RomData = new RomData
 
-  /** The registry of the current link (set by [[StaticInit.run]]): the reachability analysis re-run after
-   *  Interflow must accept references to ROM constants, which only codegen defines.
+  /** The registry of the current link (set by [[StaticInit.run]]): the
+   *  reachability analysis re-run after Interflow must accept references to ROM
+   *  constants, which only codegen defines.
    */
   @volatile var current: RomData = empty
 }

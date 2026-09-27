@@ -337,14 +337,11 @@ private[codegen] object Generate {
       }
     }
 
-    /** Emits the link-time evaluated object graphs (romdata.StaticInit) as
-     *  read-only constants: the instance of each ROM module is
-     *  `<module>.instance` (what `Op.Module` lowers to for constant modules,
-     *  and what the `__modules` slot points to) and every other object is
-     *  `<owner module>.rom<key>`. Layout is exactly the one `Lower` uses for
-     *  heap objects: RTTI pointer, optional lock word, fields in
-     *  `FieldLayout.entries` order (arrays: length, stride, elements), so the
-     *  generated code and the GC's `refFieldOffsets` read them unchanged.
+    /** Emits the link-time evaluated object graphs (romdata.StaticInit) as read-only constants: the instance of each
+     *  ROM module is `<module>.instance` (what `Op.Module` lowers to for constant modules, and what the `__modules`
+     *  slot points to) and every other object is `<owner module>.rom<key>`. Layout is exactly the one `Lower` uses for
+     *  heap objects: RTTI pointer, optional lock word, fields in `FieldLayout.entries` order (arrays: length, stride,
+     *  elements), so the generated code and the GC's `refFieldOffsets` read them unchanged.
      */
     def genRomData(): Unit = {
       val rom = meta.analysis.romData

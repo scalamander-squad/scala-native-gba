@@ -8,12 +8,12 @@ import scala.scalanative.linker._
 /** Exact-type refinement of stable module fields.
  *
  *  A Scala `val` of a module (`object`) whose initialiser allocates an object
- *  of a known class, e.g. a function literal (`val u16: Rand[U16] = _.next`)
- *  or a case-class instance, is a final field of the module class that the
- *  module constructor assigns exactly once with the result of a `classalloc`
- *  (or `box`). Loads of such a field are therefore known to yield either
- *  `null` (only observable during a module-initialisation cycle) or an
- *  instance of exactly that class. Interflow only knew the declared field type
+ *  of a known class, e.g. a function literal (`val u16: Rand[U16] = _.next`) or
+ *  a case-class instance, is a final field of the module class that the module
+ *  constructor assigns exactly once with the result of a `classalloc` (or
+ *  `box`). Loads of such a field are therefore known to yield either `null`
+ *  (only observable during a module-initialisation cycle) or an instance of
+ *  exactly that class. Interflow only knew the declared field type
  *  (`scala.Function1`), so a call through the value stayed a virtual call, was
  *  never inlined, and everything the callee allocated escaped through it.
  *
@@ -66,17 +66,18 @@ private[interflow] trait StableFields { self: Interflow =>
 
   def stableModuleFieldType(owner: Info, fld: Field): Option[nir.Type.Ref] =
     if (!StableFields.enabled) None
-    else owner match {
-      case cls: Class => stableModuleFieldType(cls, fld)
-      case _          => None
-    }
+    else
+      owner match {
+        case cls: Class => stableModuleFieldType(cls, fld)
+        case _          => None
+      }
 
   def stableModuleFieldType(cls: Class, fld: Field): Option[nir.Type.Ref] =
     if (!StableFields.enabled) None
     else
       stableFieldTypes.synchronized(stableFieldTypes.get(fld.name)) match {
         case Some(cached) => cached
-        case None =>
+        case None         =>
           val computed = computeStableModuleFieldType(cls, fld)
           stableFieldTypes.synchronized {
             stableFieldTypes(fld.name) = computed
@@ -135,12 +136,14 @@ private[interflow] trait StableFields { self: Interflow =>
         }
       }
       analysis.infos.get(ty.name).exists(_.isInstanceOf[Class]) &&
-      Sub.is(ty, declared) && !alreadyExact
+        Sub.is(ty, declared) && !alreadyExact
     }
   }
 }
 
 private[interflow] object StableFields {
   lazy val enabled: Boolean =
-    sys.props.get("scalanative.interflow.stableModuleFields").forall(_.toBoolean)
+    sys.props
+      .get("scalanative.interflow.stableModuleFields")
+      .forall(_.toBoolean)
 }
