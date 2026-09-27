@@ -21,6 +21,7 @@ private[scalanative] class Interflow(val config: build.Config)(implicit
     with Inline
     with PolyInline
     with Intrinsics
+    with StableFields
     with Log {
   implicit val platform: PlatformInfo = PlatformInfo(config)
 

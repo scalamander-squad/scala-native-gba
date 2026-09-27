@@ -317,7 +317,15 @@ private[interflow] trait Eval { self: Interflow =>
                     && !refty.isNullable =>
                 eval(nir.Op.Unbox(nir.Type.Ref(refty.className), rawObj))
               case _ =>
-                emit(nir.Op.Fieldload(ty, materialize(obj), name))
+                val loaded =
+                  emit(nir.Op.Fieldload(ty, materialize(obj), name))
+                // A stable module field (a `val` initialised with an
+                // allocation of a known class) yields a value of that exact
+                // type: record it as a delayed bitcast, see StableFields.
+                stableModuleFieldType(cls, fld) match {
+                  case Some(exactTy) => combine(nir.Conv.Bitcast, exactTy, loaded)
+                  case None          => loaded
+                }
             }
         }
       case nir.Op.Fieldstore(ty, obj, name @ FieldRef(cls, fld), value) =>
