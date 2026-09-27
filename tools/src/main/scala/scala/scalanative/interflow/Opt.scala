@@ -196,14 +196,14 @@ private[interflow] trait Opt { self: Interflow =>
 
 private[interflow] object Opt {
 
-  /** Experimental: optimise methods containing try/catch per instruction
-   *  instead of leaving them unoptimised. Enabled with
-   *  `-Dscalanative.interflow.perInstructionTryCatch=true`. Off by default:
-   *  it passes the host smoke test but still miscompiles one method of the
-   *  GBA stage-2 program (stale phi entry, see spikes/scala-native-fork).
+  /** Optimise methods containing try/catch per instruction instead of
+   *  leaving them unoptimised (see Eval.run, splitAtUnwind, inlineUnderTry).
+   *  On by default since 0.5.12-gba4opt (the stage-2 codegen crash was
+   *  Lower.genThrow's handler shortcut); disable with
+   *  `-Dscalanative.interflow.perInstructionTryCatch=false`.
    */
   lazy val perInstructionTryCatch: Boolean =
-    sys.props.get("scalanative.interflow.perInstructionTryCatch").exists(_.toBoolean)
+    sys.props.get("scalanative.interflow.perInstructionTryCatch").forall(_.toBoolean)
 
   /** Escape the whole state before every instruction that may unwind (the
    *  original per-instruction try/catch rule) instead of only the values the
