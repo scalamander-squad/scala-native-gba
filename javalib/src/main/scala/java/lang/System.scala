@@ -300,10 +300,11 @@ private[java] object SystemProperties {
   import Freestanding.isFreestanding
 
   // Freestanding: no table until the first setProperty; getProperty(key) is then null / the default.
+  private val systemProperties0: ju.Properties =
+    if (isFreestanding) null else loadProperties()
   private var systemPropertiesVar: ju.Properties =
     if (isFreestanding) null
     else {
-      val systemProperties0 = loadProperties()
       Platform.setOSProps { (key: CString, value: CString) =>
         systemProperties0.setProperty(fromCString(key), fromCString(value))
         ()
@@ -361,16 +362,20 @@ private[java] object SystemProperties {
       case _                      =>
     }
 
-  def getProperty(name: String) = {
+  def getProperty(name: String): String = {
     maybeInititializeProperty(name)
-    if (isFreestanding && systemPropertiesVar == null) null
-    else systemProperties.getProperty(name)
+    if (isFreestanding) {
+      if (systemPropertiesVar == null) null
+      else systemPropertiesVar.getProperty(name)
+    } else systemProperties.getProperty(name)
   }
 
-  def getProperty(name: String, default: String) = {
+  def getProperty(name: String, default: String): String = {
     maybeInititializeProperty(name)
-    if (isFreestanding && systemPropertiesVar == null) default
-    else systemProperties.getProperty(name, default)
+    if (isFreestanding) {
+      if (systemPropertiesVar == null) default
+      else systemPropertiesVar.getProperty(name, default)
+    } else systemProperties.getProperty(name, default)
   }
 
   def setProperty(name: String, value: String) = {
@@ -378,10 +383,12 @@ private[java] object SystemProperties {
     systemProperties.setProperty(name, value)
   }
 
-  def remove(name: String) = {
+  def remove(name: String): Object = {
     maybeInititializeProperty(name)
-    if (isFreestanding && systemPropertiesVar == null) null
-    else systemProperties.remove(name)
+    if (isFreestanding) {
+      if (systemPropertiesVar == null) null
+      else systemPropertiesVar.remove(name)
+    } else systemProperties.remove(name)
   }
 
   private def loadProperties() = {
