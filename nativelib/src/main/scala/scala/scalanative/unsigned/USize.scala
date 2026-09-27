@@ -16,6 +16,7 @@ import scala.language.implicitConversions
 import scalanative.runtime._
 import scalanative.runtime.Intrinsics._
 import unsafe._
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.meta.LinktimeInfo.is32BitPlatform
 
 import java.lang.{Long => JLong}
