@@ -6,6 +6,7 @@ import java.util.WindowsHelperMethods
 import java.{util => ju}
 
 import scala.scalanative.ffi.time
+import scala.scalanative.meta.LinktimeInfo
 import scala.scalanative.meta.LinktimeInfo.isWindows
 import scala.scalanative.posix.pwdOps._
 import scala.scalanative.posix.{pwd, unistd}
@@ -74,8 +75,12 @@ object System {
   def nanoTime(): scala.Long = time.scalanative_nano_time()
   def currentTimeMillis(): scala.Long = time.scalanative_current_time_millis()
 
-  def getenv(): ju.Map[String, String] = envVars
-  def getenv(key: String): String = envVars.get(key.toUpperCase())
+  def getenv(): ju.Map[String, String] =
+    if (Freestanding.isFreestanding) ju.Collections.emptyMap()
+    else envVars
+  def getenv(key: String): String =
+    if (Freestanding.isFreestanding) null
+    else envVars.get(key.toUpperCase())
 
   def setIn(in: InputStream): Unit =
     this.in = in
@@ -281,16 +286,33 @@ private object Streams {
   var err: PrintStream = new PrintStream(new FileOutputStream(stderr))
 }
 
+/** Targets without an operating system (triple `<arch>-none-<env>`, e.g. `armv4t-none-eabi`): no environment,
+ *  working directory, user or OS properties exist. Resolved at link time, so the code that would build the
+ *  property/environment tables (and, through `String.toUpperCase`, the `Character` case tables) is not linked.
+ */
+private[lang] object Freestanding {
+  @resolvedAtLinktime()
+  def isFreestanding: Boolean = LinktimeInfo.target.os == "unknown"
+}
+
 private[java] object SystemProperties {
   import System.{getenv, lineSeparator}
+  import Freestanding.isFreestanding
 
-  private val systemProperties0 = loadProperties()
-  private val systemProperties = {
-    Platform.setOSProps { (key: CString, value: CString) =>
-      systemProperties0.setProperty(fromCString(key), fromCString(value))
-      ()
+  // Freestanding: no table until the first setProperty; getProperty(key) is then null / the default.
+  private var systemPropertiesVar: ju.Properties =
+    if (isFreestanding) null
+    else {
+      val systemProperties0 = loadProperties()
+      Platform.setOSProps { (key: CString, value: CString) =>
+        systemProperties0.setProperty(fromCString(key), fromCString(value))
+        ()
+      }
+      systemProperties0
     }
-    systemProperties0
+  private def systemProperties: ju.Properties = {
+    if (systemPropertiesVar == null) systemPropertiesVar = new ju.Properties()
+    systemPropertiesVar
   }
 
   final val CurrentDirectoryKey = "user.dir"
@@ -318,18 +340,19 @@ private[java] object SystemProperties {
     getUserName().foreach(systemProperties.setProperty(UserNameKey, _))
 
   def getProperties(): ju.Properties = {
-    // initialize all properties
-    initializeCurrentDirectory
-    initializeUserHomeDirectory
-    initializeUserCountry
-    initializeUserLanguage
-    initializeUserName
-
+    if (!isFreestanding) {
+      // initialize all properties
+      initializeCurrentDirectory
+      initializeUserHomeDirectory
+      initializeUserCountry
+      initializeUserLanguage
+      initializeUserName
+    }
     systemProperties
   }
 
   @inline private def maybeInititializeProperty(name: String) =
-    name match {
+    if (!isFreestanding) name match {
       case `CurrentDirectoryKey`  => initializeCurrentDirectory
       case `UserHomeDirectoryKey` => initializeUserHomeDirectory
       case `UserCountryKey`       => initializeUserCountry
@@ -340,12 +363,14 @@ private[java] object SystemProperties {
 
   def getProperty(name: String) = {
     maybeInititializeProperty(name)
-    systemProperties.getProperty(name)
+    if (isFreestanding && systemPropertiesVar == null) null
+    else systemProperties.getProperty(name)
   }
 
   def getProperty(name: String, default: String) = {
     maybeInititializeProperty(name)
-    systemProperties.getProperty(name, default)
+    if (isFreestanding && systemPropertiesVar == null) default
+    else systemProperties.getProperty(name, default)
   }
 
   def setProperty(name: String, value: String) = {
@@ -355,7 +380,8 @@ private[java] object SystemProperties {
 
   def remove(name: String) = {
     maybeInititializeProperty(name)
-    systemProperties.remove(name)
+    if (isFreestanding && systemPropertiesVar == null) null
+    else systemProperties.remove(name)
   }
 
   private def loadProperties() = {
