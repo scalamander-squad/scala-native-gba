@@ -292,7 +292,7 @@ private object Streams {
  */
 private[lang] object Freestanding {
   @resolvedAtLinktime()
-  def isFreestanding: scala.Boolean = LinktimeInfo.target.os == "unknown"
+  def isFreestanding: scala.Boolean = LinktimeInfo.isFreestanding
 }
 
 private[java] object SystemProperties {

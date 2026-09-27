@@ -1,6 +1,8 @@
 package scala.scalanative
 package unsigned
 
+import scala.scalanative.meta.LinktimeInfo
+
 import java.lang.{Integer => JInteger}
 
 import scalanative.runtime.Intrinsics.{
@@ -333,6 +335,10 @@ object UInt {
   implicit def uint2ulong(x: UInt): ULong = x.toULong
 
   @inline def valueOf(intValue: scala.Int): UInt = {
+    if (LinktimeInfo.isFreestanding) new UInt(intValue)   // no box cache on bare metal (256-entry array pinned in a small heap)
+    else valueOfCached(intValue)
+  }
+  @inline private def valueOfCached(intValue: scala.Int): UInt = {
     import UIntCache.cache
     val byteValue = intValue.toByte
     if (byteValue.toInt != intValue) {

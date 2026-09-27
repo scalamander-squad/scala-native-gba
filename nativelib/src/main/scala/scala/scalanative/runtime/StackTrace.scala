@@ -129,6 +129,8 @@ private[runtime] object StackTrace {
   @noinline def currentStackTrace(): scala.Array[StackTraceElement] = {
     def emptyStackTrace = scala.Array.emptyObjectArray
       .asInstanceOf[scala.Array[StackTraceElement]]
+    if (LinktimeInfo.isFreestanding)   // no unwinder: do not touch the thread machinery or the unwind context
+      return emptyStackTrace
     // Used to prevent filling stacktraces inside `currentStackTrace` which might lead to infinite loop
     val thread = NativeThread.currentNativeThread
     if (null eq thread)
