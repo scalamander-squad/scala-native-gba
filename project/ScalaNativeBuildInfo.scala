@@ -19,7 +19,7 @@ object ScalaNativeBuildInfo {
   // The next version to be released
   private val baseVersion = "0.5.12"
   // Suffix for locally published builds of this patched tree (spikes/scala-native-fork)
-  private val localForkTag = "gba4"
+  private val localForkTag = "gba4opt"
 
   // Calculation of the version to use based on CI / env state
   val version = envOrNone("GITHUB_REF_TYPE") match {
