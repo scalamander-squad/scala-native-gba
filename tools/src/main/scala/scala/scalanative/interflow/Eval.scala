@@ -835,8 +835,11 @@ private[interflow] trait Eval { self: Interflow =>
   }
 
   def eval(conv: nir.Conv, ty: nir.Type, value: nir.Val)(implicit
-      state: State
+      state: State,
+      srcPosition: nir.SourcePosition,
+      scopeId: nir.ScopeId
   ): nir.Val = {
+    import state.emit
     def bailOut =
       throw BailOut(s"can't eval conv op: $conv[${ty.show}] ${value.show}")
     conv match {
@@ -961,14 +964,24 @@ private[interflow] trait Eval { self: Interflow =>
           case (nir.Val.Null, nir.Type.Long) => nir.Val.Long(0L)
           case (nir.Val.Null, nir.Type.Int)  => nir.Val.Int(0)
           case (nir.Val.Null, nir.Type.Size) => nir.Val.Size(0)
-          case _                             => bailOut
+          case (_: nir.Val.Global | _: nir.Val.Const, _: nir.Type.I) =>
+            // Address of a global: not foldable here, but a valid LLVM
+            // constant expression. Emit instead of giving up on the method.
+            emit(nir.Op.Conv(conv, ty, value))
+          case _ => bailOut
         }
       case nir.Conv.Inttoptr =>
         (value, ty) match {
           case (nir.Val.Long(0L), nir.Type.Ptr) => nir.Val.Null
           case (nir.Val.Int(0L), nir.Type.Ptr)  => nir.Val.Null
           case (nir.Val.Size(0L), nir.Type.Ptr) => nir.Val.Null
-          case _                                => bailOut
+          case (_: nir.Val.Int | _: nir.Val.Long | _: nir.Val.Size, nir.Type.Ptr) =>
+            // Non-zero integer constant to pointer (memory-mapped I/O,
+            // fixed addresses on bare metal). There is no NIR constant for
+            // it, so emit the conversion; LLVM folds it to `inttoptr` constant
+            // expression. Previously this bailed out of the whole method.
+            emit(nir.Op.Conv(conv, ty, value))
+          case _ => bailOut
         }
       case nir.Conv.Bitcast =>
         (value, ty) match {
