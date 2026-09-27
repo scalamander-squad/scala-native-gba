@@ -18,6 +18,8 @@ import org.eclipse.jgit.storage.file.FileRepositoryBuilder
 object ScalaNativeBuildInfo {
   // The next version to be released
   private val baseVersion = "0.5.12"
+  // Suffix for locally published builds of this patched tree (spikes/scala-native-fork)
+  private val localForkTag = "gba1"
 
   // Calculation of the version to use based on CI / env state
   val version = envOrNone("GITHUB_REF_TYPE") match {
@@ -32,7 +34,8 @@ object ScalaNativeBuildInfo {
     case _ if envOrNone("CI").isDefined =>
       s"$baseVersion-${GitInfo.commitDate}-${GitInfo.gitHash}-SNAPSHOT"
     case _ =>
-      s"$baseVersion-SNAPSHOT"
+      // Local GBA fork: published as a plain (non-snapshot) patch version
+      s"$baseVersion-$localForkTag"
   }
 
   // Copy of https://github.com/scala/scala3-lts/blob/97c2b63864d591c139531ad0260e4a202e8862b6/project/VersionUtil.scala
