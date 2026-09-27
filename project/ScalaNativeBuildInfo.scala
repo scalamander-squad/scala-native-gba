@@ -19,7 +19,7 @@ object ScalaNativeBuildInfo {
   // The next version to be released
   private val baseVersion = "0.5.13"
   // Suffix for locally published builds of this patched tree (README-FORK.md)
-  private val localForkTag = "gba7"
+  private val localForkTag = "gba8"
 
   // Calculation of the version to use based on CI / env state
   val version = envOrNone("GITHUB_REF_TYPE") match {
