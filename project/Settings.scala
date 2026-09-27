@@ -54,7 +54,8 @@ object Settings {
       v
     },
     Global / onLoad ~= { prev =>
-      if (!scala.util.Properties.isWin) {
+      // Skip in git worktrees, where `.git` is a file (gitdir pointer)
+      if (!scala.util.Properties.isWin && java.nio.file.Files.isDirectory(java.nio.file.Paths.get(".git"))) {
         import java.nio.file._
         val prePush = Paths.get(".git", "hooks", "pre-push")
         Files.createDirectories(prePush.getParent)
