@@ -31,6 +31,21 @@ import scala.scalanative.util.Scope
  *      built-in list of Scala collection node classes).
  *    - `scalanative.romdata.maxSteps=<n>`: instruction budget per module.
  *    - `scalanative.romdata.log=<file>`: write the per-module report there.
+ *    - `scalanative.romdata.strict=<regex>`: fail the link if a module whose
+ *      name matches is not ROM-resident (e.g. `pokescala\..*`).
+ *    - `scalanative.romdata.trustWriters=<regex,...>`: additional classes
+ *      whose array stores are exempt from the array escape analysis.
+ *    - `scalanative.romdata.fold=false`: do not let Interflow fold loads from
+ *      the ROM constants (default on).
+ *    - `scalanative.romdata.debugTaint=1`, `scalanative.romdata.debugMethod=<regex>`:
+ *      trace the array escape analysis (field/element taint, method bodies
+ *      with their taints, method summaries) on stderr.
+ *
+ *  Arrays (see [[ArrayEscape]]): an array reachable from a candidate is
+ *  admitted only if no code that remains at run time may store into it. Arrays
+ *  held by the sealed immutable collections (`Vector*`, CHAMP nodes,
+ *  `String`) are checked by access instead: their fields may only be touched
+ *  by code of the collection's own package.
  */
 private[scalanative] object StaticInit {
   def enabled: Boolean =
@@ -51,30 +66,55 @@ private[scalanative] object StaticInit {
     }, "romdata-static-init", 1L << 30)
     t.start(); t.join()
     if (failure != null) throw failure
-    val rom = evaluator.result()
-    evaluator.report(rom)
+    // Array ownership: a graph is emitted only if no run-time code can store into any array it
+    // reaches. The check needs the program as it will exist at run time (the constructors of ROM
+    // modules removed, dead helpers gone), so it iterates: relink with the current candidates'
+    // constructors emptied, analyse, demote the owners of every written array, repeat.
+    var rom = evaluator.result()
+    var linked: ReachabilityAnalysis.Result = null
+    var iterations = 0
+    var stable = false
+    while (!stable) {
+      iterations += 1
+      linked = if (rom.isEmpty) analysis else relink(config, analysis, rom)
+      val t0 = System.nanoTime()
+      val demoted = evaluator.checkArrays(rom, linked)
+      evaluator.arrayAnalysisNanos += System.nanoTime() - t0
+      if (demoted == 0) stable = true
+      else rom = evaluator.result()
+      if (iterations > 50) throw new build.BuildException("romdata: array analysis did not converge")
+    }
+    evaluator.report(rom, iterations)
+    evaluator.checkStrict(rom)
     if (rom.isEmpty) analysis
     else {
-      val romNames = rom.modules.keySet
-      val newDefns = analysis.defns.map {
-        case d @ nir.Defn.Define(_, nir.Global.Member(owner: nir.Global.Top, sig), _, insts, _)
-            if sig.isCtor && romNames.contains(owner) =>
-          implicit val pos: nir.SourcePosition = d.pos
-          d.copy(insts = Seq(insts.head, nir.Inst.Ret(nir.Val.Unit)))
-        case d => d
-      } :+ keepalive(rom)
-      Link(config, analysis.entries :+ KeepaliveName, newDefns) match {
-        case r: ReachabilityAnalysis.Result =>
-          r.romData = rom
-          r
-        case f: ReachabilityAnalysis.Failure =>
-          val missing = f.unreachable.take(20).map { u =>
-            s"  ${u.name.show} <- ${u.backtrace.take(3).map(_.name.show).mkString(" <- ")}"
-          }
-          throw new build.BuildException(
-            "romdata: unreachable symbols after replacing module initialisers:\n" + missing.mkString("\n")
-          )
-      }
+      linked.romData = rom
+      RomData.current = rom
+      linked
+    }
+  }
+
+  /** Re-runs reachability on the program with the constructors of the ROM modules emptied. */
+  private def relink(config: build.Config, analysis: ReachabilityAnalysis.Result, rom: RomData)(implicit
+      scope: Scope
+  ): ReachabilityAnalysis.Result = {
+    val romNames = rom.modules.keySet
+    val newDefns = analysis.defns.map {
+      case d @ nir.Defn.Define(_, nir.Global.Member(owner: nir.Global.Top, sig), _, insts, _)
+          if sig.isCtor && romNames.contains(owner) =>
+        implicit val pos: nir.SourcePosition = d.pos
+        d.copy(insts = Seq(insts.head, nir.Inst.Ret(nir.Val.Unit)))
+      case d => d
+    } :+ keepalive(rom)
+    Link(config, analysis.entries :+ KeepaliveName, newDefns) match {
+      case r: ReachabilityAnalysis.Result => r
+      case f: ReachabilityAnalysis.Failure =>
+        val missing = f.unreachable.take(20).map { u =>
+          s"  ${u.name.show} <- ${u.backtrace.take(3).map(_.name.show).mkString(" <- ")}"
+        }
+        throw new build.BuildException(
+          "romdata: unreachable symbols after replacing module initialisers:\n" + missing.mkString("\n")
+        )
     }
   }
 
@@ -134,6 +174,7 @@ private[scalanative] object StaticInit {
     "scala.collection.immutable.Map[$]Map[1-4]",
     "scala.collection.immutable.Set[$]Set[1-4]",
     "scala.collection.immutable.(Big)?Vector(Impl)?[0-6]?[$]?",
+    // Only `Vector.emptyIterator` (length 0): its mutators throw or store the values it already holds.
     "scala.collection.immutable.NewVectorIterator",
     "scala.collection.immutable.ArraySeq[$]of.*",
     "scala.collection.immutable.[$]colon[$]colon",
@@ -143,12 +184,34 @@ private[scalanative] object StaticInit {
     "scala.Tuple.*",
     "scala.Some",
     "java.lang.String",
-    "java.lang.(Integer|Long|Short|Byte|Character|Boolean|Float|Double)",
-    // The box caches are filled lazily at run time; in ROM the fill is dropped and valueOf
-    // allocates instead (same values, no caching). Sound on the GBA (ROM writes are ignored),
-    // a fault on hosts: remove these two lines for host builds.
-    "java.lang.(Integer|Long|Short|Byte|Character)Cache[$]",
-    "java.lang.Character[$].*"
+    "java.lang.(Integer|Long|Short|Byte|Character|Boolean|Float|Double)"
+  )
+
+  /** Classes whose methods store into arrays that the escape analysis cannot
+   *  prove they own: the builders of the immutable collections write only
+   *  into arrays they allocated (or, for `VectorBuilder`, into a shared
+   *  prefix only after `advance()` replaced it). Their violations are
+   *  logged as trusted instead of rejecting the graph.
+   */
+  /** Immutable collections whose arrays are package-private (no public accessor returns them):
+   *  (class regex, the package whose code may access them).
+   */
+  private val SealedCollections: Seq[(scala.util.matching.Regex, String)] = Seq(
+    "scala.collection.immutable.(BitmapIndexed|HashCollision)(Map|Set)Node".r -> "scala.collection.immutable.",
+    "scala.collection.immutable.((Big)?Vector[0-6]?|VectorStatics)[$]?".r -> "scala.collection.immutable.",
+    "java.lang.String".r -> "java.lang."
+  )
+
+  private val DefaultTrustedWriters: Seq[String] = Seq(
+    "scala.collection.immutable.VectorBuilder",
+    "scala.collection.immutable.VectorStatics[$]",
+    "scala.collection.immutable.HashMapBuilder",
+    "scala.collection.immutable.HashSetBuilder",
+    "scala.collection.immutable.BitmapIndexedMapNode",
+    "scala.collection.immutable.BitmapIndexedSetNode",
+    "scala.collection.immutable.HashCollisionMapNode",
+    "scala.collection.immutable.HashCollisionSetNode",
+    "scala.collection.immutable.NewVectorIterator"
   )
 }
 
@@ -166,6 +229,15 @@ private[scalanative] final class StaticInit(
   private val exclude = sys.props.get("scalanative.romdata.exclude").map(_.r)
   private val trusted: Seq[scala.util.matching.Regex] =
     (DefaultTrusted ++ sys.props.get("scalanative.romdata.trust").toSeq.flatMap(_.split(',')).map(_.trim).filter(_.nonEmpty)).map(_.r)
+  private val trustedWriters: Seq[scala.util.matching.Regex] =
+    (DefaultTrustedWriters ++ sys.props.get("scalanative.romdata.trustWriters").toSeq.flatMap(_.split(',')).map(_.trim).filter(_.nonEmpty)).map(_.r)
+  private val strict = sys.props.get("scalanative.romdata.strict").map(_.r)
+  var arrayAnalysisNanos = 0L
+  private val arrayLog = new StringBuilder
+  /** (entry field, writer class) pairs whose stores were exempted, for the audit. */
+  private val trustUsed = mutable.LinkedHashSet.empty[(nir.Global.Member, nir.Global.Top)]
+  /** Trusted classes whose non-final fields are written at run time (relied upon). */
+  private val classTrustUsed = mutable.LinkedHashSet.empty[(nir.Global.Top, nir.Global.Member, nir.Global.Member)]
 
   private var pendingStack: List[nir.Global.Member] = null
   private def bail(msg: String): Nothing = {
@@ -381,124 +453,201 @@ private[scalanative] final class StaticInit(
   private def isTrusted(cls: nir.Global.Top): Boolean =
     trusted.exists(_.pattern.matcher(cls.id).matches())
 
-  private val ArrayReaders = Set("clone", "length", "apply", "array_apply", "array_length", "array_clone",
-    "unsafeWrapArray", "wrapRefArray", "wrapIntArray", "genericWrapArray", "toVector", "toSeq", "toList",
-    "hashCode", "equals", "toString", "iterator", "foreach", "map", "filter", "mkString", "copyOf")
+  /** The package whose code alone may touch the arrays of a sealed immutable collection class. */
+  private def sealedPackage(cls: nir.Global.Top): Option[String] =
+    SealedCollections.collectFirst { case (re, pkg) if re.pattern.matcher(cls.id).matches() => pkg }
 
-  /** Fields whose array value is written somewhere at run time: in a non-constructor
-   *  method the array loaded from the field flows (through copies and casts) into an
-   *  array store or into a call that is not a known read-only operation.
+  private def isTrustedWriter(cls: nir.Global.Top): Boolean =
+    trustedWriters.exists(_.pattern.matcher(cls.id).matches())
+
+  /** Object-level immutability: no object of the graph may have a non-final
+   *  field that any run-time method writes, and no graph may reference the
+   *  instance of a run-time module. Arrays are checked separately, on the
+   *  relinked program, by [[checkArrays]].
    */
-  private lazy val arrayFieldWriters: Map[nir.Global.Member, nir.Global.Member] = {
-    // Plain accessors (`Label; Fieldload; Ret`) are treated as the field itself.
-    val getterOf = mutable.HashMap.empty[nir.Global.Member, nir.Global.Member]
-    analysis.defns.foreach {
-      case nir.Defn.Define(_, name, _, insts, _) if insts.nonEmpty =>
-        // Label(this); v = this.f; (copies/casts of v)*; ret v'
-        insts.head match {
-          case nir.Inst.Label(_, Seq(self)) =>
-            var field: nir.Global.Member = null
-            val derived = mutable.HashSet.empty[nir.Local]
-            val receivers = mutable.HashSet[nir.Local](self.id) // `this`, or the module itself (Scala 2 accessors)
-            var ok = true
-            insts.tail.foreach {
-              case nir.Inst.Let(n, nir.Op.Module(_), _) => receivers += n
-              case nir.Inst.Let(n, nir.Op.Fieldload(_, nir.Val.Local(obj, _), f), _) if field == null && receivers(obj) =>
-                field = f; derived += n
-              case nir.Inst.Let(n, nir.Op.Copy(nir.Val.Local(v, _)), _) if derived(v)       => derived += n
-              case nir.Inst.Let(n, nir.Op.As(_, nir.Val.Local(v, _)), _) if derived(v)      => derived += n
-              case nir.Inst.Let(n, nir.Op.Conv(_, _, nir.Val.Local(v, _)), _) if derived(v) => derived += n
-              case nir.Inst.Ret(nir.Val.Local(r, _)) if derived(r)                          => ()
-              case _                                                                          => ok = false
-            }
-            if (ok && field != null) getterOf(name) = field
-          case _ => ()
-        }
-      case _ => ()
-    }
-    def isReader(sig: nir.Sig): Boolean = sig.unmangled match {
-      case nir.Sig.Method(id, _, _) => ArrayReaders.contains(id)
-      case _                        => false
-    }
-    // Virtual calls to a getter (`this.flatChart` inside the module) resolve through the signature.
-    val getterBySig: Map[nir.Sig, nir.Global.Member] = getterOf.toSeq.map { case (m, f) => m.sig -> f }.toMap
-    val out = mutable.HashMap.empty[nir.Global.Member, nir.Global.Member]
-    analysis.defns.foreach {
-      case nir.Defn.Define(_, name, _, insts, _) if !name.sig.isCtor && !getterOf.contains(name) =>
-        val from = mutable.HashMap.empty[nir.Local, nir.Global.Member]
-        val methodSig = mutable.HashMap.empty[nir.Local, nir.Sig]
-        def src(v: nir.Val): Option[nir.Global.Member] = v match {
-          case nir.Val.Local(id, _) => from.get(id)
-          case _                    => None
-        }
-        def mark(v: nir.Val): Unit = src(v).foreach(f => if (!out.contains(f)) out(f) = name)
-        insts.foreach {
-          case nir.Inst.Let(n, nir.Op.Fieldload(_, _, f), _)  => from(n) = f
-          case nir.Inst.Let(n, nir.Op.Copy(v), _)             => src(v).foreach(from(n) = _)
-          case nir.Inst.Let(n, nir.Op.As(_, v), _)            => src(v).foreach(from(n) = _)
-          case nir.Inst.Let(n, nir.Op.Conv(_, _, v), _)       => src(v).foreach(from(n) = _)
-          case nir.Inst.Let(_, nir.Op.Arraystore(_, arr, _, _), _) => mark(arr)
-          case nir.Inst.Let(_, nir.Op.Fieldstore(_, _, _, v), _)   => mark(v) // stored elsewhere: give up
-          case nir.Inst.Let(n, nir.Op.Method(v, sig), _) =>
-            methodSig(n) = sig
-            if (!isReader(sig)) mark(v)
-          case nir.Inst.Let(n, nir.Op.Call(_, ptr, args), _) =>
-            ptr match {
-              // Passing the array to a call is not treated as a write (the callee is assumed not to
-              // store into an array it received; the immutable collections and the enum `$values`
-              // accessors satisfy this). Direct stores and `update` calls on the array are.
-              case nir.Val.Global(m: nir.Global.Member, _) if getterOf.contains(m) =>
-                from(n) = getterOf(m)
-              case nir.Val.Local(id, _) =>
-                methodSig.get(id) match {
-                  case Some(sig) if getterBySig.contains(sig) => from(n) = getterBySig(sig)
-                  case _                                      => ()
-                }
-              case _ => ()
-            }
-          case _ => () // returning the array (`copy$default$n`, accessors with checks) is "passing on", not a write
-        }
-      case _ => ()
-    }
-    out.toMap
-  }
-
   private def checkImmutable(root: Long): Unit = {
     val seen = mutable.HashSet.empty[Long]
-    // Arrays are writable by anyone who can reach them: accept them only behind a field whose array
-    // no run-time code stores into or passes on (`$values` of enums, caches) or inside a trusted
-    // immutable class (Vector, String, ...); nested arrays inherit the verdict.
-    def visit(key: Long, path: String, arraysOk: Boolean): Unit = if (seen.add(key)) {
+    def visit(key: Long, path: String): Unit = if (seen.add(key)) {
       val obj = heap(key)
       if (obj.runtimeModule && key != root)
         bail(s"references the run-time module ${obj.cls.id} at $path")
       if (obj.isArray) {
-        if (!arraysOk) bail(s"array ${describe(nir.Val.Virtual(key))} at $path is reachable through a non-private field")
         obj.elems.foreach {
-          case nir.Val.Virtual(k) => visit(k, path + "[]", arraysOk)
+          case nir.Val.Virtual(k) => visit(k, path + "[]")
           case _                  => ()
         }
       } else {
         val cls = classInfo(obj.cls)
         val trustedCls = isTrusted(obj.cls)
-        if (!trustedCls) cls.fields.foreach { f =>
+        cls.fields.foreach { f =>
           if (!f.attrs.isFinal) storedOutsideCtor.get(f.name).foreach { where =>
             // lazy vals of module instances were forced above, their initialiser never runs again
-            if (!(obj.moduleOf.isDefined && isLazyInitializer(where)))
-              bail(s"mutable object ${obj.cls.id} at $path: field ${f.name.sig.show} is written by ${where.show}")
+            if (!(obj.moduleOf.isDefined && isLazyInitializer(where))) {
+              if (trustedCls) classTrustUsed += ((obj.cls, f.name, where))
+              else bail(s"mutable object ${obj.cls.id} at $path: field ${f.name.sig.show} is written by ${where.show}")
+            }
           }
         }
         obj.fields.foreach {
-          case (fld, nir.Val.Virtual(k)) =>
-            val writer = arrayFieldWriters.get(fld)
-            if (!trustedCls && heap(k).isArray && writer.isDefined)
-              bail(s"array in field ${fld.sig.show} of ${obj.cls.id} at $path is written or passed on by ${writer.get.show}")
-            visit(k, path + "." + fld.sig.show, trustedCls || writer.isEmpty)
-          case _ => ()
+          case (fld, nir.Val.Virtual(k)) => visit(k, path + "." + fld.sig.show)
+          case _                         => ()
         }
       }
     }
-    visit(root, heap(root).cls.id, arraysOk = false)
+    visit(root, heap(root).cls.id)
+  }
+
+  /** Runs the array escape analysis on the relinked program and demotes every
+   *  ROM module whose graph holds an array that run-time code may write.
+   *  Returns the number of demoted modules.
+   */
+  def checkArrays(rom: RomData, linked: ReachabilityAnalysis.Result): Int = {
+    // Entry fields: every field of a ROM object that holds an array, with the modules whose
+    // graphs reach an array through it and the path; `nested` if such an array holds arrays.
+    val owners = mutable.LinkedHashMap.empty[nir.Global.Member, mutable.LinkedHashMap[nir.Global.Top, String]]
+    // Arrays held by the encapsulating immutable collections (tier B): checked by access, not by flow.
+    val sealedOwners = mutable.LinkedHashMap.empty[nir.Global.Member, mutable.LinkedHashMap[nir.Global.Top, String]]
+    val nested = mutable.HashSet.empty[nir.Global.Member]
+    val classes = mutable.HashMap.empty[nir.Global.Member, Set[nir.Global.Top]]
+    rom.modules.foreach {
+      case (mod, rootKey) =>
+        val seen = mutable.HashSet.empty[Long]
+        def visitArray(key: Long, entry: nir.Global.Member): Unit = if (seen.add(key)) {
+          classes(entry) = classes.getOrElse(entry, Set.empty) + nir.Type.toArrayClass(heap(key).arrayElem.get)
+          heap(key).elems.foreach {
+            case nir.Val.Virtual(k) if heap(k).isArray => nested += entry; visitArray(k, entry)
+            case nir.Val.Virtual(k)                    => visitObj(k, "")
+            case _                                     => ()
+          }
+        }
+        def visitObj(key: Long, path: String): Unit = if (seen.add(key)) {
+          val obj = heap(key)
+          obj.fields.foreach {
+            case (fld, nir.Val.Virtual(k)) =>
+              val p = if (path.isEmpty) obj.cls.id + "." + fld.sig.show else path + "." + fld.sig.show
+              if (heap(k).isArray) {
+                if (sealedPackage(obj.cls).isDefined) {
+                  sealedOwners.getOrElseUpdate(fld, mutable.LinkedHashMap.empty).getOrElseUpdate(mod, p)
+                  // the elements (family objects in a Vector) are checked like any other object
+                  def visitSealed(key: Long): Unit = if (seen.add(key)) heap(key).elems.foreach {
+                    case nir.Val.Virtual(k) if heap(k).isArray => visitSealed(k)
+                    case nir.Val.Virtual(k)                    => visitObj(k, p + "[]")
+                    case _                                     => ()
+                  }
+                  visitSealed(k)
+                } else {
+                  owners.getOrElseUpdate(fld, mutable.LinkedHashMap.empty).getOrElseUpdate(mod, p)
+                  visitArray(k, fld)
+                }
+              } else visitObj(k, p)
+            case _ => ()
+          }
+        }
+        visitObj(rootKey, "")
+    }
+    val demoted = mutable.LinkedHashMap.empty[nir.Global.Top, String]
+    // Tier B: an array field of a sealed collection class may only be loaded by code of that class's
+    // package (the language-level access rule of `private[immutable]`/`private[lang]`, re-checked here on
+    // the linked program); the package code is trusted not to write arrays it did not allocate.
+    if (sealedOwners.nonEmpty) {
+      val sealedFields: Map[nir.Global.Member, String] =
+        sealedOwners.keys.map(f => f -> sealedPackage(f.owner.asInstanceOf[nir.Global.Top]).get).toMap
+      linked.defns.foreach {
+        case d: nir.Defn.Define =>
+          val ownerId = d.name.owner.id
+          d.insts.foreach {
+            case inst @ nir.Inst.Let(_, op, _) =>
+              val f = op match {
+                case nir.Op.Fieldload(_, _, f) => f
+                case nir.Op.Fieldstore(_, _, f, _) => f
+                case nir.Op.Field(_, f) => f
+                case _ => null
+              }
+              if (f != null) sealedFields.get(f).foreach { pkg =>
+                if (!ownerId.startsWith(pkg)) {
+                  val where = s"${d.name.show}${if (inst.pos.isDefined) s" (${inst.pos.show})" else ""}"
+                  val os = sealedOwners(f)
+                  arrayLog.append(s"    VIOLATION sealed field ${f.show} accessed outside $pkg* by $where; rejects ${os.size} candidate(s)\n")
+                  os.foreach { case (mod, path) =>
+                    if (!demoted.contains(mod)) demoted(mod) = s"array at $path (sealed field ${f.show}) is accessed outside $pkg* by $where"
+                  }
+                }
+              }
+            case _ => ()
+          }
+        case _ => ()
+      }
+    }
+    if (owners.isEmpty && demoted.isEmpty) {
+      arrayLog.append(s"  array analysis pass: 0 entry fields, ${sealedOwners.size} sealed collection fields\n")
+      return 0
+    }
+    val entries = owners.keys.toIndexedSeq.map(f => ArrayEscape.Entry(f, nested.contains(f), classes.getOrElse(f, Set.empty)))
+    val infos = linked.infos
+    val PtrCls = nir.Global.Top("scala.scalanative.unsafe.Ptr")
+    val ArrayClasses = nir.Type.arrayToType.keys.toSeq
+    val mayBeArrayCache = mutable.HashMap.empty[nir.Type, Boolean]
+    def mayBeArray(ty: nir.Type): Boolean = mayBeArrayCache.getOrElseUpdate(ty, mayBeArray0(ty))
+    def mayBeArray0(ty: nir.Type): Boolean = ty match {
+      case nir.Type.Ptr | _: nir.Type.Array | nir.Type.Nothing | nir.Type.Null => true
+      case nir.Type.Ref(name, _, _) =>
+        name == nir.Rt.Object.name || name == PtrCls || nir.Type.isArray(name) || (infos.get(name) match {
+          // a class that no array class extends (`scala.scalanative.runtime.Array`, the abstract parent of all
+          // array classes, is one that does)
+          case Some(c: Class) => ArrayClasses.exists(ac => infos.get(ac).exists { case a: Class => a.is(c); case _ => false })
+          case _              => true  // trait (Cloneable, Serializable, ...) or unknown
+        })
+      case _ => false
+    }
+    def resolve(ty: nir.Type, sig: nir.Sig): Iterable[nir.Global.Member] = {
+      val name = ty match {
+        case nir.Type.Ref(n, _, _)  => Some(n)
+        case nir.Type.Array(elem, _) => Some(nir.Type.toArrayClass(elem))
+        case _                      => None
+      }
+      name.flatMap(infos.get) match {
+        case Some(s: ScopeInfo) => s.targets(sig)
+        case _ => linked.defns.collect { case d: nir.Defn.Define if d.name.sig == sig => d.name }
+      }
+    }
+    val res = ArrayEscape.analyse(linked.defns, entries, resolve, mayBeArray)
+    res.violations.foreach { v =>
+      val entry = entries(v.entry).field
+      val writerCls = v.storeOwner.top
+      val where = if (v.pos.isDefined) s"${v.method.show} (${v.pos.show})" else v.method.show
+      if (isTrustedWriter(writerCls)) trustUsed += ((entry, writerCls))
+      else {
+        val os = owners(entry)
+        arrayLog.append(s"    VIOLATION field ${entry.show}: in $where: ${v.what}; rejects ${os.size} candidate(s): ${os.keys.take(3).map(_.id).mkString(", ")}${if (os.size > 3) ", ..." else ""}\n")
+        os.foreach {
+          case (mod, path) =>
+            if (!demoted.contains(mod))
+              demoted(mod) = s"array at $path (field ${entry.show}) may be written at run time: in $where: ${v.what}"
+        }
+      }
+    }
+    arrayLog.append(s"  array analysis pass: ${entries.size} entry fields, ${sealedOwners.size} sealed collection fields, ${linked.defns.size} definitions, ${res.rounds} rounds, ${res.writingMethods} methods write a parameter array, ${res.violations.size} tainted stores, ${demoted.size} modules rejected\n")
+    demoted.foreach {
+      case (mod, reason) =>
+        modules.get(mod) match {
+          case Some(Done(key)) =>
+            heap(key).runtimeModule = true
+            modules(mod) = RuntimeInit(key, reason)
+          case _ => ()
+        }
+    }
+    demoted.size
+  }
+
+  def checkStrict(rom: RomData): Unit = strict.foreach { re =>
+    val bad = modules.collect {
+      case (n, RuntimeInit(_, r)) if re.pattern.matcher(n.id).matches() => s"  RT   ${n.id}: $r"
+      case (n, Failed(r)) if re.pattern.matcher(n.id).matches()         => s"  FAIL ${n.id}: $r"
+    }.toSeq.sorted
+    if (bad.nonEmpty)
+      throw new build.BuildException(
+        s"romdata: strict mode (${re.regex}): ${bad.size} module(s) are not ROM-resident:\n" + bad.mkString("\n")
+      )
   }
 
   // ---------------------------------------------------------- interpreter
@@ -797,6 +946,13 @@ private[scalanative] final class StaticInit(
           case "llvm.cttz.i32"  => Some(nir.Val.Int(java.lang.Integer.numberOfTrailingZeros(args(args.length - 2) match { case nir.Val.Int(x) => x; case _ => i })))
           case _                => None
         }
+      case "java.lang.Integer$" | "java.lang.Long$" | "java.lang.Short$" | "java.lang.Byte$" | "java.lang.Character$"
+          if methodName == "valueOf" && args.length == 2 && !isRefLike(args(1)) =>
+        // Boxes are plain immutable objects in ROM: allocate a fresh one instead of running the
+        // lazily filled box caches (which then stay ordinary run-time modules). Every box of the
+        // same value made here is one object, like the cache would give at run time.
+        val cls = nir.Global.Top(owner.dropRight(1))
+        Some(freshBox(cls, args(1)))
       case "scala.runtime.Statics$" if methodName == "releaseFence" =>
         Some(nir.Val.Unit)
       case "scala.scalanative.runtime.package$" if methodName == "enterMonitor" || methodName == "exitMonitor" =>
@@ -956,6 +1112,20 @@ private[scalanative] final class StaticInit(
         }
       case _ => None
     }
+  }
+
+  private val boxObjects = mutable.HashMap.empty[(nir.Global.Top, nir.Val), RomObject]
+  private def freshBox(cls: nir.Global.Top, v: nir.Val): nir.Val = {
+    val obj = boxObjects.getOrElseUpdate((cls, v), {
+      val fld = classInfo(cls).fields.find(_.name.sig.unmangled match {
+        case nir.Sig.Field("_value", _) => true
+        case _                          => false
+      }).getOrElse(bail(s"no _value field in ${cls.id}"))
+      val o = alloc(cls, None)
+      o.fields(fld.name) = v
+      o
+    })
+    ref(obj)
   }
 
   private def arrayCopy(from: nir.Val, fromPos: nir.Val, to: nir.Val, toPos: nir.Val, len: nir.Val): nir.Val = {
@@ -1327,7 +1497,7 @@ private[scalanative] final class StaticInit(
     rom
   }
 
-  def report(rom: RomData): Unit = {
+  def report(rom: RomData, iterations: Int = 1): Unit = {
     val sb = new StringBuilder
     val done = modules.collect { case (n, Done(_)) => n }.toSeq
     val failed = modules.collect { case (n, Failed(r)) => (n, r) }.toSeq
@@ -1346,11 +1516,22 @@ private[scalanative] final class StaticInit(
     failed.sortBy(_._1.id).foreach {
       case (n, r) => sb.append(s"  FAIL ${n.id}: $r\n")
     }
+    sb.append(f"  array escape analysis: $iterations iteration(s), ${arrayAnalysisNanos / 1e6}%.0f ms\n")
+    sb.append(arrayLog)
+    if (trustUsed.nonEmpty) {
+      sb.append(s"  trusted array writers relied upon (${trustUsed.size}; audit: these classes only write arrays they own):\n")
+      trustUsed.toSeq.sortBy(_._1.show).foreach { case (f, c) => sb.append(s"    ${f.show} written by ${c.id}\n") }
+    }
+    if (classTrustUsed.nonEmpty) {
+      sb.append(s"  trusted classes with run-time field writes relied upon (${classTrustUsed.size}):\n")
+      classTrustUsed.toSeq.sortBy(_._1.id).foreach { case (c, f, w) => sb.append(s"    ${c.id}.${f.sig.show} written by ${w.show}\n") }
+    }
     val text = sb.toString
     config.logger.info(text.linesIterator.next())
     sys.props.get("scalanative.romdata.log").foreach { p =>
       Files.write(Paths.get(p), text.getBytes("UTF-8"))
     }
+    Files.createDirectories(config.workDir)
     Files.write(config.workDir.resolve("romdata.log"), text.getBytes("UTF-8"))
   }
 }

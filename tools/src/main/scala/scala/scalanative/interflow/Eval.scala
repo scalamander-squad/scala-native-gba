@@ -9,6 +9,63 @@ import scala.scalanative.nir.Defn.Define.DebugInfo
 import scala.scalanative.util.{And, unreachable}
 
 private[interflow] trait Eval { self: Interflow =>
+
+  /** Folding of loads from the ROM-resident constants of `romdata` (the module instances and the object graphs
+   *  they reach are immutable by construction): `Fieldload`/`Arrayload`/`Arraylength` on a ROM object yield the
+   *  link-time value, and references to other ROM objects become exact, non-null globals, so that calls on them
+   *  devirtualise. `-Dscalanative.romdata.fold=false` disables it.
+   */
+  private[interflow] object RomFold {
+    private def rom = analysis.romData
+    val enabled: Boolean =
+      !rom.isEmpty && sys.props.get("scalanative.romdata.fold").forall(_.toBoolean)
+    var folded = 0L
+    def key(v: nir.Val)(implicit state: State): Option[Long] = v match {
+      case nir.Val.Global(n, _) => rom.byGlobal.get(n)
+      case DelayedRef(nir.Op.Module(m)) => rom.modules.get(m)
+      case _                            => None
+    }
+    def isArray(k: Long): Boolean = rom.objects(k).isArray
+    def length(k: Long): Int = { folded += 1; rom.objects(k).elems.length }
+    private def zero(ty: nir.Type): Option[nir.Val] = ty match {
+      case nir.Type.Bool   => Some(nir.Val.False)
+      case nir.Type.Char   => Some(nir.Val.Char(0))
+      case nir.Type.Byte   => Some(nir.Val.Byte(0))
+      case nir.Type.Short  => Some(nir.Val.Short(0))
+      case nir.Type.Int    => Some(nir.Val.Int(0))
+      case nir.Type.Long   => Some(nir.Val.Long(0L))
+      case nir.Type.Float  => Some(nir.Val.Float(0f))
+      case nir.Type.Double => Some(nir.Val.Double(0d))
+      case _: nir.Type.RefKind | nir.Type.Null => Some(nir.Val.Null)
+      case _               => None
+    }
+    private def convert(v: nir.Val, ty: nir.Type): Option[nir.Val] = v match {
+      case nir.Val.Virtual(k) if rom.globalName.contains(k) =>
+        Some(nir.Val.Global(rom.globalName(k), rom.refType(k)))
+      case nir.Val.Zero(_) => zero(ty)
+      case nir.Val.Null    => Some(nir.Val.Null)
+      case _: nir.Val.String | nir.Val.True | nir.Val.False | _: nir.Val.Char | _: nir.Val.Byte |
+          _: nir.Val.Short | _: nir.Val.Int | _: nir.Val.Long | _: nir.Val.Float | _: nir.Val.Double =>
+        Some(v)
+      case _ => None // classOf, pointers, ...: not folded
+    }
+    def field(k: Long, name: nir.Global.Member, ty: nir.Type): Option[nir.Val] = {
+      val obj = rom.objects(k)
+      if (obj.isArray) None
+      else {
+        val r = convert(obj.fields.getOrElse(name, nir.Val.Zero(ty)), ty)
+        if (r.isDefined) folded += 1
+        r
+      }
+    }
+    def elem(k: Long, idx: nir.Val, ty: nir.Type): Option[nir.Val] = (rom.objects(k), idx) match {
+      case (obj, nir.Val.Int(i)) if obj.isArray && i >= 0 && i < obj.elems.length =>
+        val r = convert(obj.elems(i), ty)
+        if (r.isDefined) folded += 1
+        r
+      case _ => None
+    }
+  }
   def interflow: Interflow = self
   final val preserveDebugInfo: Boolean =
     self.config.compilerConfig.sourceLevelDebuggingConfig.generateLocalVariables
@@ -300,6 +357,10 @@ private[interflow] trait Eval { self: Interflow =>
       case nir.Op.Classalloc(ClassRef(cls), zone) =>
         val zonePtr = zone.map(instance => materialize(eval(instance)))
         nir.Val.Virtual(state.allocClass(cls, zonePtr))
+      case nir.Op.Fieldload(ty, rawObj, name @ FieldRef(cls, fld))
+          if RomFold.enabled && RomFold.key(eval(rawObj)).exists(k => RomFold.field(k, name, ty).isDefined) =>
+        // a load from a ROM-resident constant (romdata): the value is known at link time
+        RomFold.field(RomFold.key(eval(rawObj)).get, name, ty).get
       case nir.Op.Fieldload(ty, rawObj, name @ FieldRef(cls, fld)) =>
         eval(rawObj) match {
           case VirtualRef(_, _, values)   => values(fld.index)
@@ -519,6 +580,11 @@ private[interflow] trait Eval { self: Interflow =>
               )
             )
         }
+      case nir.Op.Arrayload(ty, arr, idx)
+          if RomFold.enabled && RomFold.key(eval(arr)).exists(k => RomFold.elem(k, eval(idx), ty).isDefined) =>
+        RomFold.elem(RomFold.key(eval(arr)).get, eval(idx), ty).get
+      case nir.Op.Arraylength(arr) if RomFold.enabled && RomFold.key(eval(arr)).exists(RomFold.isArray) =>
+        nir.Val.Int(RomFold.length(RomFold.key(eval(arr)).get))
       case nir.Op.Arrayload(ty, arr, idx) =>
         (eval(arr), eval(idx)) match {
           case (VirtualRef(_, _, values), nir.Val.Int(offset))
