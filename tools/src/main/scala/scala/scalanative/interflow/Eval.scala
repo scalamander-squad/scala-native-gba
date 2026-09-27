@@ -1119,22 +1119,40 @@ private[interflow] trait Eval { self: Interflow =>
         visiting = clsName :: visiting
 
         val init = clsName.member(nir.Sig.Ctor(Seq.empty))
-        val isPure =
-          !shallVisit(init) ||
-            visitDuplicate(init, argumentTypes(init)).fold(false)(
-              isPureModuleCtor
-            )
-
-        setModulePurity(clsName, isPure)
-        isPure
+        if (!shallVisit(init)) {
+          setModulePurity(clsName, true)
+          true
+        } else {
+          val dup = duplicateName(init, argumentTypes(init))
+          visitDuplicate(init, argumentTypes(init)) match {
+            case Some(defn) =>
+              val isPure = isPureModuleCtor(clsName, defn)
+              setModulePurity(clsName, isPure)
+              isPure
+            case None if hasStarted(dup) && !isDone(dup) =>
+              /* The constructor is being optimised right now (Scala 3 stores
+               * module fields through `module @Self`, so every constructor
+               * asks about its own module): answer "impure" for this use
+               * without caching it, the real answer comes once it is done. */
+              false
+            case None =>
+              setModulePurity(clsName, false)
+              false
+          }
+        }
       }
     }
 
-    def isPureModuleCtor(defn: nir.Defn.Define): Boolean = {
+    def isPureModuleCtor(clsName: nir.Global.Top, defn: nir.Defn.Define): Boolean = {
       val nir.Inst.Label(_, nir.Val.Local(self, _) +: _) =
         defn.insts.head: @unchecked
 
       val canStoreTo = mutable.Set(self)
+      // Values computed without side effects from the objects above (their
+      // fields, array elements and lengths, pure arithmetic on those): they
+      // may be stored too, e.g. `object A { val f = B.g.map(...) }` stores a
+      // field loaded from another (pure) module into a closure.
+      val knownValues = mutable.Set.empty[nir.Local]
       val arrayLength = mutable.Map.empty[nir.Local, Int]
 
       defn.insts.foreach {
@@ -1154,13 +1172,24 @@ private[interflow] trait Eval { self: Interflow =>
               _
             ) =>
           canStoreTo += n
+        case nir.Inst.Let(n, nir.Op.Fieldload(_, nir.Val.Local(to, _), _), _)
+            if canStoreTo.contains(to) =>
+          knownValues += n
+        case nir.Inst.Let(n, nir.Op.Arrayload(_, nir.Val.Local(to, _), _), _)
+            if canStoreTo.contains(to) =>
+          knownValues += n
+        case nir.Inst.Let(n, nir.Op.Arraylength(nir.Val.Local(to, _)), _)
+            if canStoreTo.contains(to) =>
+          knownValues += n
+        case nir.Inst.Let(n, op, _) if op.isPure =>
+          knownValues += n
         case _ =>
           ()
       }
 
       def canStoreValue(v: nir.Val): Boolean = v match {
         case _ if v.isCanonical  => true
-        case nir.Val.Local(n, _) => canStoreTo.contains(n)
+        case nir.Val.Local(n, _) => canStoreTo.contains(n) || knownValues.contains(n)
         case _: nir.Val.String   => true
         case _                   => false
       }
@@ -1181,7 +1210,11 @@ private[interflow] trait Eval { self: Interflow =>
             ) =>
           true
         case inst @ nir.Inst.Let(_, nir.Op.Module(name), _) =>
-          if (!visiting.contains(name)) {
+          if (name == clsName) {
+            // The module under construction: its slot is assigned before
+            // the constructor runs, so this is a read of `this`.
+            true
+          } else if (!visiting.contains(name)) {
             isPureModule(name)
           } else {
             false
