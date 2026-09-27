@@ -71,7 +71,12 @@ private[scalanative] object MemoryLayout {
 
   def alignmentOf(ty: nir.Type)(implicit platform: PlatformInfo): Long =
     ty match {
-      case nir.Type.Long | nir.Type.Double | nir.Type.Size =>
+      case nir.Type.Long | nir.Type.Double =>
+        // Not `sizeOfPtr`: on 32-bit ARM/RISC-V/MIPS/wasm the ABI (and LLVM's
+        // data layout, `i64:64`) aligns i64/double to 8 bytes even though
+        // pointers are 4 bytes; only 32-bit x86 (SysV) uses 4.
+        platform.alignOfLong
+      case nir.Type.Size =>
         platform.sizeOfPtr
       case nir.Type.Nothing | nir.Type.Ptr | _: nir.Type.RefKind =>
         platform.sizeOfPtr
