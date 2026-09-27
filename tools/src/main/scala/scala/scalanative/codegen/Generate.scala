@@ -33,6 +33,7 @@ private[codegen] object Generate {
       genClassMetadata()
       genTraitMetadata()
       genModuleAccessors()
+      genRomData()
       genModuleArray()
       genModuleArraySize()
       genScanableTypesIds()
@@ -224,7 +225,9 @@ private[codegen] object Generate {
           val cond = nir.Val.Local(fresh(), nir.Type.Bool)
           val alloc = nir.Val.Local(fresh(), clsTy)
 
-          if (cls.isConstantModule) {
+          if (meta.analysis.romData.isRomModule(name)) {
+            () // instance emitted by genRomData
+          } else if (cls.isConstantModule) {
             val moduleTyName = name.member(nir.Sig.Generated("type"))
             val moduleTyVal = nir.Val.Global(moduleTyName, nir.Type.Ptr)
             val instanceName = name.member(nir.Sig.Generated("instance"))
@@ -330,6 +333,86 @@ private[codegen] object Generate {
 
             buf += loadDefn
           }
+        }
+      }
+    }
+
+    /** Emits the link-time evaluated object graphs (romdata.StaticInit) as
+     *  read-only constants: the instance of each ROM module is
+     *  `<module>.instance` (what `Op.Module` lowers to for constant modules,
+     *  and what the `__modules` slot points to) and every other object is
+     *  `<owner module>.rom<key>`. Layout is exactly the one `Lower` uses for
+     *  heap objects: RTTI pointer, optional lock word, fields in
+     *  `FieldLayout.entries` order (arrays: length, stride, elements), so the
+     *  generated code and the GC's `refFieldOffsets` read them unchanged.
+     */
+    def genRomData(): Unit = {
+      val rom = meta.analysis.romData
+      if (!rom.isEmpty) {
+        implicit val pos: nir.SourcePosition = nir.SourcePosition.NoPosition
+        val infos = meta.analysis.infos
+        val names = scala.collection.mutable.HashMap.empty[Long, nir.Global.Member]
+        rom.reachable.foreach {
+          case (obj, owner) =>
+            names(obj.key) = obj.moduleOf match {
+              case Some(mod) => mod.member(nir.Sig.Generated("instance"))
+              case None      => owner.member(nir.Sig.Generated("rom" + obj.key))
+            }
+        }
+        def zero(ty: nir.Type): nir.Val = ty match {
+          case nir.Type.Bool   => nir.Val.False
+          case nir.Type.Char   => nir.Val.Char(0)
+          case nir.Type.Byte   => nir.Val.Byte(0)
+          case nir.Type.Short  => nir.Val.Short(0)
+          case nir.Type.Int    => nir.Val.Int(0)
+          case nir.Type.Long   => nir.Val.Long(0L)
+          case nir.Type.Float  => nir.Val.Float(0f)
+          case nir.Type.Double => nir.Val.Double(0d)
+          case nir.Type.Size   => nir.Val.Size(0L)
+          case nir.Type.Unit   => nir.Val.Unit
+          case _               => nir.Val.Null
+        }
+        def genVal(v: nir.Val, ty: nir.Type): nir.Val = v match {
+          case nir.Val.Virtual(k) =>
+            nir.Val.Global(names.getOrElse(k, util.unsupported(s"romdata: unreachable object $k")), nir.Type.Ptr)
+          case nir.Val.ClassOf(n) => meta.rtti(infos(n)).const
+          case nir.Val.Zero(_)    => zero(ty)
+          case nir.Val.Null       => nir.Val.Null
+          case other              => other
+        }
+        rom.reachable.foreach {
+          case (obj, _) =>
+            val name = names(obj.key)
+            obj.arrayElem match {
+              case Some(elem) =>
+                val arrCls = infos(nir.Type.toArrayClass(elem)).asInstanceOf[Class]
+                val stride = MemoryLayout.sizeOf(elem)(meta.platform)
+                val values = obj.elems.toSeq.map(genVal(_, elem))
+                val ty = nir.Type.StructValue(
+                  nir.Type.Ptr :: meta.lockWordType.toList :::
+                    nir.Type.Int :: nir.Type.Int ::
+                    nir.Type.ArrayValue(elem, values.length) :: Nil
+                )
+                val value = nir.Val.StructValue(
+                  meta.rtti(arrCls).const :: meta.lockWordVals :::
+                    nir.Val.Int(values.length) :: nir.Val.Int(stride.toInt) ::
+                    nir.Val.ArrayValue(elem, values) :: Nil
+                )
+                buf += nir.Defn.Const(nir.Attrs.None, name, ty, value)
+              case None =>
+                val cls = infos(obj.cls).asInstanceOf[Class]
+                val entries = meta.layout(cls).entries
+                val values = entries.map { f =>
+                  genVal(obj.fields.getOrElse(f.name, nir.Val.Zero(f.ty)), f.ty)
+                }
+                val ty = nir.Type.StructValue(
+                  nir.Type.Ptr :: meta.lockWordType.toList ::: entries.map(_.ty).toList
+                )
+                val value = nir.Val.StructValue(
+                  meta.rtti(cls).const :: meta.lockWordVals ::: values.toList
+                )
+                buf += nir.Defn.Const(nir.Attrs.None, name, ty, value)
+            }
         }
       }
     }
