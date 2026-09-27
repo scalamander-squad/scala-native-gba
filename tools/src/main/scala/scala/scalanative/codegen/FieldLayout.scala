@@ -29,7 +29,17 @@ private[codegen] class FieldLayout(cls: Class)(implicit meta: Metadata) {
       (fields, layout)
     } else {
       val rttiHeader = if (isArray) ArrayHeader else ObjectHeader
-      val layout = MemoryLayout(rttiHeader.layout +: entries.map(_.ty))
+      // For array classes the RTTI `size` is what the GC allocators add
+      // `length * stride` to (`scalanative_GC_alloc_array`), i.e. it must be the
+      // offset of the first element in `{ ArrayHeader, [0 x elem] }` as laid out
+      // by LLVM, not just the header size: on 32-bit ARM/RISC-V/MIPS/wasm the
+      // 12-byte header is padded to 16 for `i64`/`double` elements.
+      val elemPadding =
+        if (isArray)
+          nir.Type.fromArrayClass(cls.name).map(nir.Type.ArrayValue(_, 0)).toSeq
+        else Nil
+      val layout =
+        MemoryLayout(rttiHeader.layout +: (entries.map(_.ty) ++ elemPadding))
       (entries, layout)
     }
   }
