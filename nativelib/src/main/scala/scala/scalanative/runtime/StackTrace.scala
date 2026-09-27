@@ -42,6 +42,9 @@ private[runtime] object StackTrace {
       : scala.Array[InstructionPointer] = {
     def emptyStackTrace = scala.Array.emptyLongArray
 
+    if (LinktimeInfo.isFreestanding)   // no unwinder on bare metal: no thread machinery, no unwind context
+      return emptyStackTrace
+
     val thread = NativeThread.currentNativeThread
     if (null eq thread)
       return emptyStackTrace
