@@ -24,6 +24,18 @@ private[interflow] final class State(val blockId: nir.Local)(
   // re-emit a getClass call (and subsequent icmp eq's can be CSE'd by LLVM).
   var getClassCache = mutable.AnyRefMap.empty[nir.Val, nir.Val]
 
+  /* Per-instruction try/catch support (see Eval.run). `unwind` is attached to
+   * every instruction emitted while evaluating an `Inst.Let` that carries an
+   * unwind handler. `unwindEdges` lists the handlers that became successors
+   * of the current block, each with a copy of the state that is valid on the
+   * exceptional path (see `unwindSnapshot`). Both are per block: they are not
+   * copied by `fullClone`. */
+  var unwind: nir.Next = nir.Next.None
+  var unwindEdges = mutable.UnrolledBuffer.empty[(nir.Next.Label, State)]
+  /* True for the state copies stored in `unwindEdges`: they must never emit
+   * (the merge would place those instructions after the throwing one). */
+  var isUnwindSnapshot: Boolean = false
+
   // Delayed init
   var localNames: mutable.OpenHashMap[nir.Local, String] = _
   var virtualNames: mutable.LongMap[String] = _
@@ -107,11 +119,70 @@ private[interflow] final class State(val blockId: nir.Local)(
       if (emitted.contains(op)) {
         emitted(op)
       } else {
-        val value = emit.let(op, nir.Next.None)
+        val value = emit.let(op, unwind)
         emitted(op) = value
         value
       }
-    } else emit.let(op, nir.Next.None)
+    } else emit.let(op, unwind)
+  }
+
+  /** Materializes every virtual or delayed value reachable from this state.
+   *  Called right before evaluating an instruction that may unwind, so that
+   *  nothing referenced by the exception handler would have to be emitted
+   *  after that instruction (which would only be reached on the normal path).
+   */
+  def escapeAll()(implicit analysis: ReachabilityAnalysis.Result): Unit = {
+    locals.keys.toSeq.foreach { local =>
+      locals(local) = materialize(locals(local))
+    }
+    heap.keys.toSeq.foreach { addr =>
+      if (!hasEscaped(addr)) materialize(nir.Val.Virtual(addr))
+    }
+  }
+
+  /** A copy of this state describing the exceptional successor of the last
+   *  evaluated instruction. Values created while evaluating that instruction
+   *  (its result, virtual objects it produced) do not exist on that path and
+   *  are dropped: they must never be materialized there.
+   */
+  def unwindSnapshot(
+      emitCountBefore: Int,
+      emittedBefore: mutable.AnyRefMap[nir.Op, nir.Val.Local]
+  ): State = {
+    val snapshot = fullClone(blockId)
+    snapshot.isUnwindSnapshot = true
+    snapshot.fresh = fresh // never restart the block's id namespace
+    // Locals defined by the instructions emitted for the throwing op: not
+    // available on the exceptional edge (LLVM: an invoke's result and any
+    // value after it do not dominate the landing pad).
+    val definedByOp = emit.toSeq
+      .drop(emitCountBefore)
+      .collect { case nir.Inst.Let(id, _, _) => id }
+      .toSet
+    def invalid(v: nir.Val): Boolean = v match {
+      case nir.Val.Local(id, _) => definedByOp.contains(id)
+      case _                    => false
+    }
+    val dropped = snapshot.heap.collect {
+      case (addr, EscapedInstance(value)) if invalid(value) => addr
+      case (addr, instance) if !instance.isInstanceOf[EscapedInstance] => addr
+    }.toSet
+    def refersToDropped(v: nir.Val): Boolean = v match {
+      case nir.Val.Virtual(addr) => dropped.contains(addr)
+      case _                     => invalid(v)
+    }
+    dropped.foreach(snapshot.heap.remove)
+    snapshot.locals.collect {
+      case (local, v) if refersToDropped(v) => local
+    }.toSeq.foreach(snapshot.locals.remove)
+    snapshot.delayed.collect {
+      case (op, v) if refersToDropped(v) => op
+    }.toSeq.foreach(snapshot.delayed.remove)
+    snapshot.emitted = emittedBefore.clone().filter {
+      case (_, v) => !invalid(v)
+    }
+    snapshot.getClassCache.clear()
+    snapshot
   }
 
   def emitVirtual(

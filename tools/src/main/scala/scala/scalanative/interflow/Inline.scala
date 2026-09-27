@@ -38,6 +38,9 @@ private[interflow] trait Inline { self: Interflow =>
         def callerTooBig = mergeProcessor.currentSize() > maxCallerSize
         def inlineDepthLimitExceeded = inliningBacktrace.size > maxInlineDepth
         def hasUnwind = defn.hasUnwind
+        // A call evaluated inside a try block: the callee's throws would have
+        // to be redirected to the handler, which inlining does not do.
+        def callSiteUnwinds = state.unwind ne nir.Next.None
 
         val shall = mode match {
           case build.Mode.Debug =>
@@ -51,7 +54,7 @@ private[interflow] trait Inline { self: Interflow =>
         }
         lazy val shallNot = {
           def hardLimits =
-            isRecursive || isDenylisted || noInline || isExtern
+            isRecursive || isDenylisted || noInline || isExtern || callSiteUnwinds
           def softLimits =
             calleeTooBig || callerTooBig || hasUnwind || inlineDepthLimitExceeded
 

@@ -275,6 +275,13 @@ private[interflow] final class MergeProcessor(
           newEscapes.nonEmpty
         }) ()
 
+        // A state on an exceptional edge cannot receive instructions (they
+        // would follow the throwing instruction): fall back to no-opt.
+        states.foreach { s =>
+          if (s.isUnwindSnapshot && s.emit.size > 0)
+            throw BailOut("try-catch: materialization needed on exceptional edge")
+        }
+
         // Wrap up anre rturn a new merge state
 
         val mergeState = new State(merge)(eval.preserveDebugInfo)
@@ -309,6 +316,11 @@ private[interflow] final class MergeProcessor(
           invalid(name) = block
           if (block.cf != null) {
             visitCf(from, block.cf)
+          }
+          if (block.end != null) {
+            block.end.unwindEdges.foreach {
+              case (next, _) => visitLabel(from, next)
+            }
           }
         }
       }
@@ -358,6 +370,11 @@ private[interflow] final class MergeProcessor(
 
     if (rootBlock.cf != null) {
       visitCf(rootBlock, rootBlock.cf)
+    }
+    if (rootBlock.end != null) {
+      rootBlock.end.unwindEdges.foreach {
+        case (next, _) => visitLabel(rootBlock, next)
+      }
     }
 
     invalid.values.foreach { block =>
@@ -414,6 +431,25 @@ private[interflow] final class MergeProcessor(
       case _ =>
         unreachable
     }
+
+    // Exceptional successors of instructions evaluated inside a try block.
+    // Blocks are split after every such instruction (Opt.splitAtUnwind), so
+    // there is at most one of them per block and its snapshot state is the
+    // state at the end of the block on the exceptional path.
+    block.end.unwindEdges.foreach {
+      case (next, snapshot) =>
+        val nextMergeBlock = findMergeBlock(next.id)
+        block.outgoing.get(next.id) match {
+          case Some(_) =>
+            throw BailOut(
+              s"try-catch: multiple edges from ${block.label.id.show} to handler ${next.id.show}"
+            )
+          case None =>
+            block.outgoing(next.id) = nextMergeBlock
+            nextMergeBlock.incoming(block.label.id) = (next.args, snapshot)
+            todo += next.id
+        }
+    }
   }
 
   def visit(
@@ -430,6 +466,15 @@ private[interflow] final class MergeProcessor(
       block.invalidations += 1
     }
 
+    // Exceptional edges recorded by a previous visit of this block are
+    // stale (its instructions are re-emitted); drop them, they are
+    // re-registered below if still present.
+    if (block.end != null) {
+      block.end.unwindEdges.foreach {
+        case (next, _) =>
+          findMergeBlock(next.id).incoming.remove(block.label.id)
+      }
+    }
     block.start = newState.fullClone(block.id)
     block.end = newState
     block.cf = eval.run(

@@ -72,7 +72,12 @@ private[interflow] final class MergeBlock(
         )(result, block)
       }
 
-    result ++= block.end.emit
+    block.end.emit.foreach {
+      case let @ nir.Inst.Let(id, op, unwind: nir.Next.Unwind) =>
+        result += nir.Inst.Let(id, op, mergeUnwind(unwind))(let.pos, let.scopeId)
+      case inst =>
+        result += inst
+    }
     block.cf match {
       case ret: nir.Inst.Ret =>
         result += ret

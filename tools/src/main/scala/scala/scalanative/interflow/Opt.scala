@@ -13,7 +13,10 @@ private[interflow] trait Opt { self: Interflow =>
     val defn =
       getOriginal(originalName(name))
 
-    defn.attrs.opt != nir.Attr.NoOpt && !defn.hasUnwind
+    // With per-instruction try/catch (Opt.perInstructionTryCatch) methods
+    // with unwind handlers are optimised too (see Eval.run / splitAtUnwind).
+    defn.attrs.opt != nir.Attr.NoOpt &&
+    (Opt.perInstructionTryCatch || !defn.hasUnwind)
   }
 
   def opt(name: nir.Global.Member): nir.Defn.Define =
@@ -165,7 +168,8 @@ private[interflow] trait Opt { self: Interflow =>
   ): Seq[MergeBlock] = {
     val processor =
       MergeProcessor.fromEntry(
-        insts = insts,
+        insts =
+          if (Opt.perInstructionTryCatch) Opt.splitAtUnwind(insts) else insts,
         args = args,
         debugInfo = debugInfo,
         state = state,
@@ -188,5 +192,44 @@ private[interflow] trait Opt { self: Interflow =>
     val blocks = processor.toSeq(retTy)
     MergePostProcessor.postProcess(blocks)
   }
+}
 
+private[interflow] object Opt {
+
+  /** Experimental: optimise methods containing try/catch per instruction
+   *  instead of leaving them unoptimised. Enabled with
+   *  `-Dscalanative.interflow.perInstructionTryCatch=true`. Off by default:
+   *  it passes the host smoke test but still miscompiles one method of the
+   *  GBA stage-2 program (stale phi entry, see spikes/scala-native-fork).
+   */
+  lazy val perInstructionTryCatch: Boolean =
+    sys.props.get("scalanative.interflow.perInstructionTryCatch").exists(_.toBoolean)
+
+  /** Ends the basic block after every instruction that has an unwind handler
+   *  (by jumping to a fresh label), so that a block has at most one
+   *  exceptional successor and the state at its end is the state on that
+   *  edge. See Eval.run and MergeProcessor.updateDirectSuccessors.
+   */
+  def splitAtUnwind(insts: Array[nir.Inst]): Array[nir.Inst] = {
+    val hasUnwind = insts.exists {
+      case nir.Inst.Let(_, _, unwind) => unwind ne nir.Next.None
+      case _                          => false
+    }
+    if (!hasUnwind) insts
+    else {
+      val fresh = nir.Fresh(insts.toSeq)
+      val buf = mutable.UnrolledBuffer.empty[nir.Inst]
+      insts.foreach {
+        case let @ nir.Inst.Let(_, _, unwind) if unwind ne nir.Next.None =>
+          implicit val pos: nir.SourcePosition = let.pos
+          val cont = fresh()
+          buf += let
+          buf += nir.Inst.Jump(nir.Next.Label(cont, Nil))
+          buf += nir.Inst.Label(cont, Nil)
+        case inst =>
+          buf += inst
+      }
+      buf.toArray
+    }
+  }
 }

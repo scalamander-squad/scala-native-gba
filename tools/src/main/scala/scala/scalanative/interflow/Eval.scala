@@ -22,6 +22,29 @@ private[interflow] trait Eval { self: Interflow =>
   )(implicit state: State): nir.Inst.Cf = {
     import state.{materialize, delay}
 
+    /* Evaluates the unwind handler of an instruction inside a try block:
+     * escapes everything (the handler may observe any object allocated so
+     * far, and nothing may be materialized after the instruction on its
+     * behalf), binds the exception to a fresh local and evaluates the
+     * handler arguments. Each unwind site gets its own exception local, as
+     * Lower generates one landing pad label (with `exc` as parameter) per
+     * distinct `Next.Unwind`. */
+    def evalUnwind(unwind: nir.Next)(implicit
+        srcPosition: nir.SourcePosition,
+        scopeId: nir.ScopeId
+    ): nir.Next = unwind match {
+      case nir.Next.None =>
+        unwind
+      case nir.Next.Unwind(exc, nir.Next.Label(target, args)) =>
+        state.escapeAll()
+        val excLocal = nir.Val.Local(state.fresh(), exc.ty)
+        state.storeLocal(exc.id, excLocal)
+        val evaluatedArgs = args.map(arg => materialize(eval(arg)))
+        nir.Next.Unwind(excLocal, nir.Next.Label(target, evaluatedArgs))
+      case _ =>
+        unreachable
+    }
+
     var pc = offsets(from)
 
     if (preserveDebugInfo && pc == 0) {
@@ -48,10 +71,34 @@ private[interflow] trait Eval { self: Interflow =>
           unreachable
         case let @ nir.Inst.Let(local, op, unwind) =>
           lastScopeId = scopeMapping(let.scopeId)
-          if (unwind ne nir.Next.None) {
-            throw BailOut("try-catch")
+          val value = unwind match {
+            case nir.Next.None => eval(op)
+            case _ if !Opt.perInstructionTryCatch =>
+              throw BailOut("try-catch")
+            case _ =>
+              // Per-instruction try/catch: instead of giving up on the whole
+              // method, escape the state, evaluate the op with the handler
+              // attached to whatever it emits and, if it did emit, record the
+              // handler as an exceptional successor of this block. The block
+              // ends right after this instruction (Opt.splitAtUnwind), so the
+              // snapshot taken here is the state on that edge.
+              val evaluatedUnwind = evalUnwind(unwind)
+              val emitCountBefore = state.emit.size
+              val emittedBefore = state.emitted.clone()
+              state.unwind = evaluatedUnwind
+              val v =
+                try eval(op)
+                finally state.unwind = nir.Next.None
+              if (state.emit.size > emitCountBefore) {
+                val nir.Next.Unwind(_, next: nir.Next.Label) =
+                  evaluatedUnwind: @unchecked
+                state.unwindEdges += ((
+                  next,
+                  state.unwindSnapshot(emitCountBefore, emittedBefore)
+                ))
+              }
+              v
           }
-          val value = eval(op)
           if (preserveDebugInfo) {
             val localName = debugInfo.localNames.get(local)
             value match {
@@ -63,7 +110,8 @@ private[interflow] trait Eval { self: Interflow =>
             }
           }
           if (value.ty == nir.Type.Nothing) {
-            return nir.Inst.Unreachable(unwind)(inst.pos)
+            // The exceptional edge, if any, was recorded above.
+            return nir.Inst.Unreachable(nir.Next.None)(inst.pos)
           } else {
             val ty = value match {
               case InstanceRef(ty) => ty
@@ -122,15 +170,14 @@ private[interflow] trait Eval { self: Interflow =>
               return nir.Inst.Switch(materialize(scrut), defaultNext, cases)
           }
         case nir.Inst.Throw(v, unwind) =>
-          if (unwind ne nir.Next.None) {
+          if ((unwind ne nir.Next.None) && !Opt.perInstructionTryCatch)
             throw BailOut("try-catch")
-          }
-          return nir.Inst.Throw(eval(v), nir.Next.None)
+          val excv = eval(v)
+          return nir.Inst.Throw(excv, evalUnwind(unwind))
         case nir.Inst.Unreachable(unwind) =>
-          if (unwind ne nir.Next.None) {
+          if ((unwind ne nir.Next.None) && !Opt.perInstructionTryCatch)
             throw BailOut("try-catch")
-          }
-          return nir.Inst.Unreachable(nir.Next.None)
+          return nir.Inst.Unreachable(evalUnwind(unwind))
         case _ =>
           bailOut
       }
