@@ -76,7 +76,9 @@ package object runtime {
       )
       System.exit(1)
     }
-    NativeThread.TLS.currentThreadInfo().isInitialized = true
+    // freestanding runtimes (no OS, one thread) have no C ThreadInfo
+    if (!scala.scalanative.meta.LinktimeInfo.isFreestanding)
+      NativeThread.TLS.currentThreadInfo().isInitialized = true
 
     val argv = fromRawPtr[CString](rawargv)
     val args = new scala.Array[String](argc - 1)
@@ -130,7 +132,8 @@ package object runtime {
       }
       shouldWaitForThreads || shouldRunQueuedTasks
     }) ()
-    NativeThread.TLS.currentThreadInfo().isInitialized = false
+    if (!scala.scalanative.meta.LinktimeInfo.isFreestanding)
+      NativeThread.TLS.currentThreadInfo().isInitialized = false
     StackOverflowGuards.close()
   }
 
