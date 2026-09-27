@@ -1,6 +1,8 @@
 package scala.scalanative
 package unsigned
 
+import scala.scalanative.meta.LinktimeInfo
+
 import scalanative.runtime.Intrinsics.{castIntToRawSizeUnsigned, unsignedOf}
 
 /** `UByte`, a 8-bit unsigned integer. */
@@ -315,6 +317,10 @@ object UByte {
   implicit def ubyte2ulong(x: UByte): ULong = x.toULong
 
   @inline def valueOf(byteValue: scala.Byte): UByte = {
+    if (LinktimeInfo.isFreestanding) new UByte(byteValue)   // no box cache on bare metal (256-entry array pinned in a small heap)
+    else valueOfCached(byteValue)
+  }
+  @inline private def valueOfCached(byteValue: scala.Byte): UByte = {
     import UByteCache.cache
     val idx = byteValue - scala.Byte.MinValue
     val cached = cache(idx)

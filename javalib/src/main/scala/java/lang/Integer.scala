@@ -494,7 +494,9 @@ object Integer {
   import IntegerCache.cache
 
   @inline def valueOf(intValue: scala.Int): Integer = {
-    if (intValue.toByte.toInt != intValue) {
+    if (Freestanding.isFreestanding) {   // no 256-entry box cache on bare metal (pokescala-gba/rt)
+      new Integer(intValue)
+    } else if (intValue.toByte.toInt != intValue) {
       new Integer(intValue)
     } else {
       val idx = intValue + 128

@@ -235,6 +235,10 @@ object USize {
   @inline implicit def uintToUSize(x: UInt): USize = x.toUSize
 
   @inline def valueOf(rawSize: RawSize): USize = {
+    if (LinktimeInfo.isFreestanding) new USize(rawSize)   // no box cache on bare metal (256-entry array pinned in a small heap)
+    else valueOfCached(rawSize)
+  }
+  @inline private def valueOfCached(rawSize: RawSize): USize = {
     import USizeCache.cache
     val intValue = castRawSizeToInt(rawSize)
     val byteValue = intValue.toByte

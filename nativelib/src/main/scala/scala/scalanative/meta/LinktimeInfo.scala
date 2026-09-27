@@ -16,6 +16,12 @@ object LinktimeInfo {
   @resolvedAtLinktime
   def isWindows: Boolean = target.os == "windows"
 
+  /** Bare-metal target (no OS in the triple, e.g. armv4t-none-eabi): no environment, filesystem, threads or unwinder;
+   *  used to leave out the box caches, system properties and stack-trace machinery (pokescala-gba/rt).
+   */
+  @resolvedAtLinktime
+  def isFreestanding: Boolean = target.os == "unknown"
+
   @resolvedAtLinktime
   def isLinux: Boolean = target.os == "linux"
 
