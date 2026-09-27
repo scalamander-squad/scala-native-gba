@@ -224,6 +224,7 @@ object Byte {
   import ByteCache.cache
 
   @inline def valueOf(byteValue: scala.Byte): Byte = {
+    if (Freestanding.isFreestanding) return new Byte(byteValue)
     val idx = byteValue - MIN_VALUE
     val cached = cache(idx)
     if (cached != null) {

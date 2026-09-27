@@ -467,7 +467,9 @@ object Long {
   import LongCache.cache
 
   @inline def valueOf(longValue: scala.Long): Long = {
-    if (longValue.toByte.toLong != longValue) {
+    if (Freestanding.isFreestanding) {
+      new Long(longValue)
+    } else if (longValue.toByte.toLong != longValue) {
       new Long(longValue)
     } else {
       val idx = (longValue + 128).toInt

@@ -401,7 +401,9 @@ object Character {
   import CharacterCache.cache
 
   def valueOf(charValue: scala.Char): Character = {
-    if (charValue > 127) {
+    if (Freestanding.isFreestanding) {
+      new Character(charValue)
+    } else if (charValue > 127) {
       new Character(charValue)
     } else {
       val idx = charValue.toInt
