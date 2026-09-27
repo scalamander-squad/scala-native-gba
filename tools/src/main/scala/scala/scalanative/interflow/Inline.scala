@@ -41,6 +41,28 @@ private[interflow] trait Inline { self: Interflow =>
         // A call evaluated inside a try block: the callee's throws would have
         // to be redirected to the handler, which inlining does not do.
         def callSiteUnwinds = state.unwind ne nir.Next.None
+        /* Every `ret` of the callee returns an object the callee itself
+         * allocated (a tuple, an option, a box, a small case class): inlined,
+         * that allocation becomes a virtual instance in the caller and is
+         * scalar-replaced unless it escapes there. Bounded by the size limit
+         * below; see StableFields for the module-`val` half of the story. */
+        def returnsFreshAllocation =
+          Inline.inlineAllocReturning &&
+            defn.insts.size <= Inline.allocReturningMaxSize && {
+              val allocs = defn.insts.collect {
+                case nir.Inst.Let(
+                      id,
+                      _: nir.Op.Classalloc | _: nir.Op.Box | _: nir.Op.Arrayalloc,
+                      _
+                    ) =>
+                  id
+              }.toSet
+              val rets = defn.insts.collect { case nir.Inst.Ret(v) => v }
+              allocs.nonEmpty && rets.nonEmpty && rets.forall {
+                case nir.Val.Local(id, _) => allocs.contains(id)
+                case _                    => false
+              }
+            }
 
         val shall = mode match {
           case build.Mode.Debug =>
@@ -50,7 +72,8 @@ private[interflow] trait Inline { self: Interflow =>
           case build.Mode.ReleaseSize =>
             alwaysInline || isSmall || isCtor
           case build.Mode.ReleaseFull =>
-            alwaysInline || hintInline || isSmall || isCtor || hasVirtualArgs
+            alwaysInline || hintInline || isSmall || isCtor || hasVirtualArgs ||
+              returnsFreshAllocation
         }
         lazy val shallNot = {
           def hardLimits =
@@ -247,4 +270,17 @@ private[interflow] trait Inline { self: Interflow =>
       val nir.Type.Function(_, retty) = defn.ty
       adapt(res, retty)
     }
+}
+
+private[interflow] object Inline {
+
+  /** Inline callees that return a fresh allocation (release-full only).
+   *  Disable with `-Dscalanative.interflow.inlineAllocReturning=false`;
+   *  `-Dscalanative.interflow.allocReturningMaxSize=N` bounds the callee size
+   *  (instructions of its optimised body, default 64).
+   */
+  lazy val inlineAllocReturning: Boolean =
+    sys.props.get("scalanative.interflow.inlineAllocReturning").forall(_.toBoolean)
+  lazy val allocReturningMaxSize: Int =
+    sys.props.get("scalanative.interflow.allocReturningMaxSize").map(_.toInt).getOrElse(64)
 }
