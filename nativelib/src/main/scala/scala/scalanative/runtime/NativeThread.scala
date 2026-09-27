@@ -213,6 +213,15 @@ object NativeThread {
   @noinline
   @exported("scalanative_NativeThread_start")
   private[runtime] def threadEntryPoint(nativeThread: NativeThread): RawPtr = {
+    // An @exported method is a reachability root whenever NativeThread is
+    // reached: without the link-time guard a single-threaded build (e.g. a
+    // freestanding target without pthreads) would link Thread, PosixThread
+    // and the thread-info runtime for a start routine that can never run.
+    if (isMultithreadingEnabled) runThread(nativeThread)
+    null
+  }
+
+  private def runThread(nativeThread: NativeThread): Unit = {
     import nativeThread.thread
     val stackBottom = Intrinsics.stackalloc[Int]()
     TLS.assignCurrentThread(thread, nativeThread)
@@ -249,7 +258,6 @@ object NativeThread {
       }
       StackOverflowGuards.close()
     }
-    null
   }
   @extern
   private[scalanative] object TLS {
