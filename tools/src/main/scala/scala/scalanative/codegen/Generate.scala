@@ -351,14 +351,7 @@ private[codegen] object Generate {
       if (!rom.isEmpty) {
         implicit val pos: nir.SourcePosition = nir.SourcePosition.NoPosition
         val infos = meta.analysis.infos
-        val names = scala.collection.mutable.HashMap.empty[Long, nir.Global.Member]
-        rom.reachable.foreach {
-          case (obj, owner) =>
-            names(obj.key) = obj.moduleOf match {
-              case Some(mod) => mod.member(nir.Sig.Generated("instance"))
-              case None      => owner.member(nir.Sig.Generated("rom" + obj.key))
-            }
-        }
+        val names = rom.globalName
         def zero(ty: nir.Type): nir.Val = ty match {
           case nir.Type.Bool   => nir.Val.False
           case nir.Type.Char   => nir.Val.Char(0)
