@@ -221,8 +221,19 @@ private[scalanative] object Lower {
       implicit var lastScopeId: nir.ScopeId = nir.ScopeId.TopLevel
       insts.tail.foreach {
         case inst @ nir.Inst.Let(n, op, unwind) =>
+          // LLVM intrinsics cannot be invoked (and never throw): drop the
+          // handler Interflow may attach to them inside a try block.
+          val effectiveUnwind = op match {
+            case nir.Op.Call(_, nir.Val.Global(nir.Global.Member(_, sig), _), _)
+                if (sig.unmangled match {
+                  case nir.Sig.Extern(id) => id.startsWith("llvm.")
+                  case _                  => false
+                }) =>
+              nir.Next.None
+            case _ => unwind
+          }
           ScopedVar.scoped(
-            unwindHandler := getUnwindHandler(unwind)(inst.pos)
+            unwindHandler := getUnwindHandler(effectiveUnwind)(inst.pos)
           ) {
             lastScopeId = inst.scopeId
             genLet(buf, n, op)(inst.pos, lastScopeId)
@@ -521,10 +532,17 @@ private[scalanative] object Lower {
     )(implicit srcPosition: nir.SourcePosition, scopeId: nir.ScopeId) = {
       genGuardNotNull(buf, exc)
       unwind match {
-        case nir.Next.Unwind(excVal, toLabel) =>
-          // We know exactly where the next exception handler is defined.
-          // Jump to the label and skip unwinding
-          buf.jump(toLabel.id, Seq(exc))
+        case nir.Next.Unwind(_, _)
+            if !platform.useCxxExceptions && unwindHandler.get.isDefined =>
+          // We know exactly where the next exception handler is defined:
+          // skip unwinding and jump to the block `getUnwindHandler` made for
+          // this edge. It binds the exception local exactly as the landing
+          // pad does and continues to the handler with the edge's arguments.
+          // (Jumping to the handler label itself with `Seq(exc)` assumed the
+          // front end's `Unwind(exc, Label(h, Seq(exc)))` shape; after
+          // Interflow the arguments are arbitrary merged values and the
+          // handler may use the exception local directly.)
+          buf.jump(unwindHandler.get.get, Seq(exc))
         case _ =>
           // Invoke scalanative_throw and let exception handling find the handler
           genOp(buf, fresh(), nir.Op.Call(throwSig, throw_, Seq(exc)))
