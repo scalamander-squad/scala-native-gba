@@ -30,19 +30,25 @@ private[interflow] trait Inline { self: Interflow =>
         def hasVirtualArgs = args.exists(_.isInstanceOf[nir.Val.Virtual])
         def noOpt = defn.attrs.opt == nir.Attr.NoOpt
         def noInline = defn.attrs.inlineHint == nir.Attr.NoInline
-        def alwaysInline = defn.attrs.inlineHint == nir.Attr.AlwaysInline
-        def hintInline = defn.attrs.inlineHint == nir.Attr.InlineHint
-        def isRecursive = inliningBacktrace.contains(name)
-        def isDenylisted = this.isDenylisted(name)
-        def calleeTooBig = defn.insts.size > maxCalleeSize
-        def callerTooBig = mergeProcessor.currentSize() > maxCallerSize
-        def inlineDepthLimitExceeded = inliningBacktrace.size > maxInlineDepth
         // A callee with its own try blocks, or a call evaluated inside a try
         // block: inlined only with Opt.inlineUnderTry, which processes the
         // callee's handlers per instruction and makes every inlined
         // instruction (and every callee `throw` without a handler) unwind to
         // the call site's handler (Eval.run `attachUnwind`).
         def hasUnwind = defn.hasUnwind && !Opt.inlineUnderTry
+        // The Scala method called by an `@exported` wrapper (Opt.optimizingExport):
+        // the wrapper's only call, taking the boxes it made of its C arguments.
+        def isExportTarget =
+          optimizingExportDepth.get == inliningBacktrace.size && !isCtor &&
+            !hasUnwind
+        def alwaysInline =
+          defn.attrs.inlineHint == nir.Attr.AlwaysInline || isExportTarget
+        def hintInline = defn.attrs.inlineHint == nir.Attr.InlineHint
+        def isRecursive = inliningBacktrace.contains(name)
+        def isDenylisted = this.isDenylisted(name)
+        def calleeTooBig = defn.insts.size > maxCalleeSize
+        def callerTooBig = mergeProcessor.currentSize() > maxCallerSize
+        def inlineDepthLimitExceeded = inliningBacktrace.size > maxInlineDepth
         def callSiteUnwinds =
           (state.unwind ne nir.Next.None) && !Opt.inlineUnderTry
         /* Every `ret` of the callee returns an object the callee itself
