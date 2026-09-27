@@ -160,7 +160,8 @@ final class Class(
     val isAllowlisted =
       interflow.Allowlist.constantModules.contains(name)
 
-    isModule && (isAllowlisted || attrs.isExtern || (hasEmptyOrNoCtor && hasNoFields))
+    isModule && (isAllowlisted || attrs.isExtern || (hasEmptyOrNoCtor && hasNoFields) ||
+      analysis.romData.isRomModule(name))
   }
   def resolve(sig: nir.Sig): Option[nir.Global.Member] = {
     responds.get(sig).orElse(defaultResponds.get(sig))
@@ -254,6 +255,8 @@ object ReachabilityAnalysis {
       val resolvedVals: mutable.Map[String, nir.Val],
       val foundServiceProviders: FoundServiceProviders
   ) extends ReachabilityAnalysis {
+    /** Module instances evaluated at link time (see romdata.StaticInit). */
+    var romData: romdata.RomData = romdata.RomData.empty
     lazy val ObjectClass = infos(nir.Rt.Object.name).asInstanceOf[Class]
     lazy val StringClass = infos(nir.Rt.StringName).asInstanceOf[Class]
     lazy val StringValueField =
