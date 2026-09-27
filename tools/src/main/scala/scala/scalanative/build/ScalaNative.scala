@@ -54,6 +54,21 @@ private[scalanative] object ScalaNative {
       ec: ExecutionContext
   ): Future[ReachabilityAnalysis.Result] = {
     import config.logger
+    // ROM-resident data: evaluate module initialisers at link time first, so
+    // that the optimizer sees the (now empty) constructors and constant modules.
+    val analysis1: ReachabilityAnalysis.Result =
+      if (romdata.StaticInit.enabled)
+        logger.time("Evaluating module initialisers (romdata)") {
+          romdata.StaticInit.run(config, analysis)(Scope.unsafe())
+        }
+      else analysis
+    def keepRomData(result: ReachabilityAnalysis): ReachabilityAnalysis = {
+      result match {
+        case r: ReachabilityAnalysis.Result => r.romData = analysis1.romData
+        case _                              => ()
+      }
+      result
+    }
     if (config.compilerConfig.optimize)
       logger.timeAsync(s"Optimizing (${config.mode} mode)") {
         withReachabilityPostprocessing(
@@ -63,13 +78,13 @@ private[scalanative] object ScalaNative {
           forceQuickCheck = false
         ) {
           Interflow
-            .optimize(config, analysis)
-            .map(Link(config, analysis.entries, _))
+            .optimize(config, analysis1)
+            .map(defns => keepRomData(Link(config, analysis1.entries, defns)))
         }
       }
     else {
       logger.info("Optimizing skipped")
-      Future.successful(analysis)
+      Future.successful(analysis1)
     }
   }
 
