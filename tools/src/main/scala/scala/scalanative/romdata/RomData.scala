@@ -41,6 +41,28 @@ final class RomData {
   /** Every object reachable from a ROM module instance, in a deterministic
    *  order, paired with the module through which it was first reached.
    */
+  /** The global that codegen emits for each object: `<module>.instance` for module instances,
+   *  `<first owner module>.rom<key>` otherwise.
+   */
+  lazy val globalName: Map[Long, nir.Global.Member] =
+    reachable.map {
+      case (obj, owner) =>
+        obj.key -> (obj.moduleOf match {
+          case Some(mod) => mod.member(nir.Sig.Generated("instance"))
+          case None      => owner.member(nir.Sig.Generated("rom" + obj.key))
+        })
+    }.toMap
+  lazy val byGlobal: Map[nir.Global, Long] = globalName.map(_.swap)
+
+  /** The static type of a reference to the constant of `key` (exact, non-null). */
+  def refType(key: Long): nir.Type = {
+    val obj = objects(key)
+    obj.arrayElem match {
+      case Some(elem) => nir.Type.Array(elem, nullable = false)
+      case None       => nir.Type.Ref(obj.cls, exact = true, nullable = false)
+    }
+  }
+
   lazy val reachable: Seq[(RomObject, nir.Global.Top)] = {
     val out = mutable.ArrayBuffer.empty[(RomObject, nir.Global.Top)]
     val seen = mutable.HashSet.empty[Long]
@@ -61,4 +83,9 @@ final class RomData {
 
 object RomData {
   val empty: RomData = new RomData
+
+  /** The registry of the current link (set by [[StaticInit.run]]): the reachability analysis re-run after
+   *  Interflow must accept references to ROM constants, which only codegen defines.
+   */
+  @volatile var current: RomData = empty
 }
