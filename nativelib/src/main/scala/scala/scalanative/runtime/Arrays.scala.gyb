@@ -209,6 +209,10 @@ final class ${T}Array private () extends Array[${Repr}] {
 
   @inline def stride: Int = ${sizeT}
 
+  /** Offset of the first element; not always `MemoryLayout.Array.ValuesOffset` (see there). */
+  @alwaysinline private def valuesOffset: Int =
+    MemoryLayout.Array.valuesOffsetFor(castRawSizeToInt(Intrinsics.alignmentOf[${Repr}]))
+
   @inline def atRaw(i: Int): RawPtr =
     if (i < 0 || i >= length) {
       throwOutOfBounds(i, length)
@@ -218,7 +222,7 @@ final class ${T}Array private () extends Array[${Repr}] {
 
   @inline def atRawUnsafe(i: Int): RawPtr = {
     val rawptr = castObjectToRawPtr(this)
-    elemRawPtr(rawptr, MemoryLayout.Array.ValuesOffset + ${sizeT} * i)
+    elemRawPtr(rawptr, valuesOffset + ${sizeT} * i)
   }
 
   @inline def apply(i: Int): ${Repr} = load${Repr}(atRaw(i))
@@ -230,8 +234,8 @@ final class ${T}Array private () extends Array[${Repr}] {
     val arr     = GC.alloc_array(arrcls, length, ${sizeT})
     val src     = castObjectToRawPtr(this)
     ffi.memcpy(
-      elemRawPtr(arr, MemoryLayout.Array.ValuesOffset),
-      elemRawPtr(src, MemoryLayout.Array.ValuesOffset),
+      elemRawPtr(arr, valuesOffset),
+      elemRawPtr(src, valuesOffset),
       castIntToRawSizeUnsigned(${sizeT} * length)
     )
     val array = castRawPtrToObject(arr).asInstanceOf[${T}Array]
@@ -262,7 +266,8 @@ object ${T}Array {
       throw new NegativeArraySizeException
     }
     val arrcls  = classOf[${T}Array]
-    val arrsize = castIntToRawSizeUnsigned(MemoryLayout.Array.ValuesOffset + ${sizeT} * length)
+    val valuesOffset = MemoryLayout.Array.valuesOffsetFor(castRawSizeToInt(Intrinsics.alignmentOf[${Repr}]))
+    val arrsize = castIntToRawSizeUnsigned(valuesOffset + ${sizeT} * length)
     val arr = zone.allocImpl(castObjectToRawPtr(arrcls), arrsize)
     val array = castRawPtrToObject(arr).asInstanceOf[${T}Array]
     storeInt(elemRawPtr(arr, MemoryLayout.Array.LengthOffset), length)
