@@ -155,9 +155,14 @@ private[interflow] final class State(val blockId: nir.Local)(
     // Locals defined by the instructions emitted for the throwing op: not
     // available on the exceptional edge (LLVM: an invoke's result and any
     // value after it do not dominate the landing pad).
+    // An inlined callee also defines block parameters (its merge points).
     val definedByOp = emit.toSeq
       .drop(emitCountBefore)
-      .collect { case nir.Inst.Let(id, _, _) => id }
+      .flatMap {
+        case nir.Inst.Let(id, _, _)       => Seq(id)
+        case nir.Inst.Label(_, params)    => params.map(_.id)
+        case _                            => Nil
+      }
       .toSet
     def invalid(v: nir.Val): Boolean = v match {
       case nir.Val.Local(id, _) => definedByOp.contains(id)

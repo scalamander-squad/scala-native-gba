@@ -205,6 +205,22 @@ private[interflow] object Opt {
   lazy val perInstructionTryCatch: Boolean =
     sys.props.get("scalanative.interflow.perInstructionTryCatch").exists(_.toBoolean)
 
+  /** Escape the whole state before every instruction that may unwind (the
+   *  original per-instruction try/catch rule) instead of only the values the
+   *  handler can observe. `-Dscalanative.interflow.tryEscapeAll=true`.
+   */
+  lazy val tryEscapeAll: Boolean =
+    sys.props.get("scalanative.interflow.tryEscapeAll").exists(_.toBoolean)
+
+  /** Inline at call sites inside a try block, and callees that contain one
+   *  (only with per-instruction try/catch). The inlined instructions unwind
+   *  to the call site's handler (Eval.run `attachUnwind`). Disable with
+   *  `-Dscalanative.interflow.inlineUnderTry=false`.
+   */
+  lazy val inlineUnderTry: Boolean =
+    perInstructionTryCatch &&
+      sys.props.get("scalanative.interflow.inlineUnderTry").forall(_.toBoolean)
+
   /** Ends the basic block after every instruction that has an unwind handler
    *  (by jumping to a fresh label), so that a block has at most one
    *  exceptional successor and the state at its end is the state on that
