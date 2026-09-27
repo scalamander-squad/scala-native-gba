@@ -16,7 +16,7 @@ private[interflow] trait Opt { self: Interflow =>
     // With per-instruction try/catch (Opt.perInstructionTryCatch) methods
     // with unwind handlers are optimised too (see Eval.run / splitAtUnwind).
     defn.attrs.opt != nir.Attr.NoOpt &&
-    (Opt.perInstructionTryCatch || !defn.hasUnwind)
+      (Opt.perInstructionTryCatch || !defn.hasUnwind)
   }
 
   /** While the body being optimised is an `@exported` wrapper (an extern
@@ -216,14 +216,16 @@ private[interflow] trait Opt { self: Interflow =>
 
 private[interflow] object Opt {
 
-  /** Optimise methods containing try/catch per instruction instead of
-   *  leaving them unoptimised (see Eval.run, splitAtUnwind, inlineUnderTry).
-   *  On by default since 0.5.12-gba4opt (the stage-2 codegen crash was
+  /** Optimise methods containing try/catch per instruction instead of leaving
+   *  them unoptimised (see Eval.run, splitAtUnwind, inlineUnderTry). On by
+   *  default since 0.5.12-gba4opt (the stage-2 codegen crash was
    *  Lower.genThrow's handler shortcut); disable with
    *  `-Dscalanative.interflow.perInstructionTryCatch=false`.
    */
   lazy val perInstructionTryCatch: Boolean =
-    sys.props.get("scalanative.interflow.perInstructionTryCatch").forall(_.toBoolean)
+    sys.props
+      .get("scalanative.interflow.perInstructionTryCatch")
+      .forall(_.toBoolean)
 
   /** Escape the whole state before every instruction that may unwind (the
    *  original per-instruction try/catch rule) instead of only the values the
@@ -233,8 +235,8 @@ private[interflow] object Opt {
     sys.props.get("scalanative.interflow.tryEscapeAll").exists(_.toBoolean)
 
   /** Inline at call sites inside a try block, and callees that contain one
-   *  (only with per-instruction try/catch). The inlined instructions unwind
-   *  to the call site's handler (Eval.run `attachUnwind`). Disable with
+   *  (only with per-instruction try/catch). The inlined instructions unwind to
+   *  the call site's handler (Eval.run `attachUnwind`). Disable with
    *  `-Dscalanative.interflow.inlineUnderTry=false`.
    */
   lazy val inlineUnderTry: Boolean =
@@ -247,12 +249,14 @@ private[interflow] object Opt {
    *  disables it.
    */
   lazy val inlineExportTargets: Boolean =
-    sys.props.get("scalanative.interflow.inlineExportTargets").forall(_.toBoolean)
+    sys.props
+      .get("scalanative.interflow.inlineExportTargets")
+      .forall(_.toBoolean)
 
   /** Ends the basic block after every instruction that has an unwind handler
-   *  (by jumping to a fresh label), so that a block has at most one
-   *  exceptional successor and the state at its end is the state on that
-   *  edge. See Eval.run and MergeProcessor.updateDirectSuccessors.
+   *  (by jumping to a fresh label), so that a block has at most one exceptional
+   *  successor and the state at its end is the state on that edge. See Eval.run
+   *  and MergeProcessor.updateDirectSuccessors.
    */
   def splitAtUnwind(insts: Array[nir.Inst]): Array[nir.Inst] = {
     val hasUnwind = insts.exists {

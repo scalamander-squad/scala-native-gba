@@ -55,7 +55,8 @@ object Settings {
     },
     Global / onLoad ~= { prev =>
       // Skip in git worktrees, where `.git` is a file (gitdir pointer)
-      if (!scala.util.Properties.isWin && java.nio.file.Files.isDirectory(java.nio.file.Paths.get(".git"))) {
+      if (!scala.util.Properties.isWin && java.nio.file.Files
+            .isDirectory(java.nio.file.Paths.get(".git"))) {
         import java.nio.file._
         val prePush = Paths.get(".git", "hooks", "pre-push")
         Files.createDirectories(prePush.getParent)
@@ -627,11 +628,17 @@ object Settings {
     def parseVersionRange(dirName: String): Option[VersionsRange] =
       dirName match {
         case Since(v) =>
-          Version.parse(v).map(version => VersionsRange(start = version, end = Version.Max))
+          Version
+            .parse(v)
+            .map(version => VersionsRange(start = version, end = Version.Max))
         case Until(v) =>
-          Version.parse(v).map(version => VersionsRange(start = Version.Min, end = version))
+          Version
+            .parse(v)
+            .map(version => VersionsRange(start = Version.Min, end = version))
         case Between(s, e) =>
-          for { start <- Version.parse(s); end <- Version.parse(e) } yield VersionsRange(start = start, end = end)
+          for {
+            start <- Version.parse(s); end <- Version.parse(e)
+          } yield VersionsRange(start = start, end = end)
         case _ => None
       }
     val currentVersion = Version

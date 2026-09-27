@@ -5,9 +5,9 @@ scalamander-squad for compiling Scala 3 to ARMv4T/Thumb for the Game Boy Advance
 It is not affiliated with or endorsed by the Scala Native project, EPFL or the Scala Center.
 
 - **Base:** Scala Native v0.5.12, plus upstream's unreleased Scala 3.9/3.10 compiler-plugin support.
-- **Branch `gba`:** the current toolchain (published locally as `0.5.12-gba6`). Earlier stages are kept as branches:
-  `rt-javalib` (gba2), `romdata`, `rt-interflow` (gba3), `rt-combined` (gba4), `rt-opt` (gba4opt),
-  `rt-combined-s39` (gba5), `rt-gba6` (gba6).
+- **Branch `main`:** the current toolchain (`0.5.12-gba6`), Scala Native v0.5.12 plus our commits with full history.
+  Each stage is tagged: `v0.5.12-gba1` … `v0.5.12-gba6` on `main`; `v0.5.12-romdata2` and `v0.5.12-gba4opt` mark the
+  original development lines of the ROM-data pass and the optimiser patches, which were later applied onto `main`.
 - **What the patches do** (each commit describes one change):
   - 32-bit fixes: `Long`/`Double` field and array alignment matching the LLVM layout on 32-bit ARM.
   - Exceptions: correct unwind edges for throws inside `try`; unwind handlers attached to polymorphic dispatch.

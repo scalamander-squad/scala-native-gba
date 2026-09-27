@@ -8,11 +8,12 @@ import scala.scalanative.OptimizerSpec
 
 /** Per-instruction try/catch with inlining under the handler
  *  (`Opt.inlineUnderTry`): calls inside a `try` are inlined, the inlined
- *  instructions unwind to the call site's handler, a callee `throw` goes to
- *  it, and objects the handler cannot observe (a case class, the box of an
- *  argument passed to a callee that contains a `try`) are scalar-replaced:
- *  the method allocates exactly what the same body without `try` does. Semantics are checked by the host smoke test
- *  (spikes/scala-native-opt/hosttest), this test checks the shape.
+ *  instructions unwind to the call site's handler, a callee `throw` goes to it,
+ *  and objects the handler cannot observe (a case class, the box of an argument
+ *  passed to a callee that contains a `try`) are scalar-replaced: the method
+ *  allocates exactly what the same body without `try` does. Semantics are
+ *  checked by the host smoke test (spikes/scala-native-opt/hosttest), this test
+ *  checks the shape.
  */
 class InlineUnderTryTest extends OptimizerSpec {
 

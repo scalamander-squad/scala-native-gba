@@ -286,9 +286,11 @@ private object Streams {
   var err: PrintStream = new PrintStream(new FileOutputStream(stderr))
 }
 
-/** Targets without an operating system (triple `<arch>-none-<env>`, e.g. `armv4t-none-eabi`): no environment,
- *  working directory, user or OS properties exist. Resolved at link time, so the code that would build the
- *  property/environment tables (and, through `String.toUpperCase`, the `Character` case tables) is not linked.
+/** Targets without an operating system (triple `<arch>-none-<env>`, e.g.
+ *  `armv4t-none-eabi`): no environment, working directory, user or OS
+ *  properties exist. Resolved at link time, so the code that would build the
+ *  property/environment tables (and, through `String.toUpperCase`, the
+ *  `Character` case tables) is not linked.
  */
 private[lang] object Freestanding {
   @resolvedAtLinktime()

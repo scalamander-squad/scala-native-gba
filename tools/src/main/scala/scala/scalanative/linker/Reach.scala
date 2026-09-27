@@ -314,7 +314,8 @@ private[linker] class Reach(
       name: nir.Global
   )(implicit srcPosition: nir.SourcePosition): Unit =
     if (!enqueued.contains(name) && name.ne(nir.Global.None) &&
-        !romdata.RomData.current.byGlobal.contains(name)) { // ROM constants are defined by codegen
+        !romdata.RomData.current.byGlobal
+          .contains(name)) { // ROM constants are defined by codegen
       enqueued += name
       track(name)
       todo ::= name

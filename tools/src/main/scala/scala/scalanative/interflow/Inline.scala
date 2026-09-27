@@ -62,7 +62,8 @@ private[interflow] trait Inline { self: Interflow =>
               val allocs = defn.insts.collect {
                 case nir.Inst.Let(
                       id,
-                      _: nir.Op.Classalloc | _: nir.Op.Box | _: nir.Op.Arrayalloc,
+                      _: nir.Op.Classalloc | _: nir.Op.Box |
+                      _: nir.Op.Arrayalloc,
                       _
                     ) =>
                   id
@@ -233,7 +234,8 @@ private[interflow] trait Inline { self: Interflow =>
               case inst @ nir.Inst.Throw(value, unwind) =>
                 // toInsts maps the unwind edge (a handler of the callee) to
                 // its merged block.
-                block.cf = nir.Inst.Throw(block.end.materialize(value), unwind)(inst.pos)
+                block.cf =
+                  nir.Inst.Throw(block.end.materialize(value), unwind)(inst.pos)
                 emit ++= block.toInsts()
               case _ =>
                 emit ++= block.toInsts()
@@ -285,13 +287,18 @@ private[interflow] trait Inline { self: Interflow =>
 
 private[interflow] object Inline {
 
-  /** Inline callees that return a fresh allocation (release-full only).
-   *  Disable with `-Dscalanative.interflow.inlineAllocReturning=false`;
+  /** Inline callees that return a fresh allocation (release-full only). Disable
+   *  with `-Dscalanative.interflow.inlineAllocReturning=false`;
    *  `-Dscalanative.interflow.allocReturningMaxSize=N` bounds the callee size
    *  (instructions of its optimised body, default 64).
    */
   lazy val inlineAllocReturning: Boolean =
-    sys.props.get("scalanative.interflow.inlineAllocReturning").forall(_.toBoolean)
+    sys.props
+      .get("scalanative.interflow.inlineAllocReturning")
+      .forall(_.toBoolean)
   lazy val allocReturningMaxSize: Int =
-    sys.props.get("scalanative.interflow.allocReturningMaxSize").map(_.toInt).getOrElse(64)
+    sys.props
+      .get("scalanative.interflow.allocReturningMaxSize")
+      .map(_.toInt)
+      .getOrElse(64)
 }

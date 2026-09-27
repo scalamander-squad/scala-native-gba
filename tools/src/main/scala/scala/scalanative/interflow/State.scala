@@ -128,8 +128,8 @@ private[interflow] final class State(val blockId: nir.Local)(
 
   /** Materializes every virtual or delayed value reachable from this state.
    *  Called right before evaluating an instruction that may unwind, so that
-   *  nothing referenced by the exception handler would have to be emitted
-   *  after that instruction (which would only be reached on the normal path).
+   *  nothing referenced by the exception handler would have to be emitted after
+   *  that instruction (which would only be reached on the normal path).
    */
   def escapeAll()(implicit analysis: ReachabilityAnalysis.Result): Unit = {
     locals.keys.toSeq.foreach { local =>
@@ -159,9 +159,9 @@ private[interflow] final class State(val blockId: nir.Local)(
     val definedByOp = emit.toSeq
       .drop(emitCountBefore)
       .flatMap {
-        case nir.Inst.Let(id, _, _)       => Seq(id)
-        case nir.Inst.Label(_, params)    => params.map(_.id)
-        case _                            => Nil
+        case nir.Inst.Let(id, _, _)    => Seq(id)
+        case nir.Inst.Label(_, params) => params.map(_.id)
+        case _                         => Nil
       }
       .toSet
     def invalid(v: nir.Val): Boolean = v match {
@@ -169,7 +169,7 @@ private[interflow] final class State(val blockId: nir.Local)(
       case _                    => false
     }
     val dropped = snapshot.heap.collect {
-      case (addr, EscapedInstance(value)) if invalid(value) => addr
+      case (addr, EscapedInstance(value)) if invalid(value)            => addr
       case (addr, instance) if !instance.isInstanceOf[EscapedInstance] => addr
     }.toSet
     def refersToDropped(v: nir.Val): Boolean = v match {
@@ -177,12 +177,18 @@ private[interflow] final class State(val blockId: nir.Local)(
       case _                     => invalid(v)
     }
     dropped.foreach(snapshot.heap.remove)
-    snapshot.locals.collect {
-      case (local, v) if refersToDropped(v) => local
-    }.toSeq.foreach(snapshot.locals.remove)
-    snapshot.delayed.collect {
-      case (op, v) if refersToDropped(v) => op
-    }.toSeq.foreach(snapshot.delayed.remove)
+    snapshot.locals
+      .collect {
+        case (local, v) if refersToDropped(v) => local
+      }
+      .toSeq
+      .foreach(snapshot.locals.remove)
+    snapshot.delayed
+      .collect {
+        case (op, v) if refersToDropped(v) => op
+      }
+      .toSeq
+      .foreach(snapshot.delayed.remove)
     snapshot.emitted = emittedBefore.clone().filter {
       case (_, v) => !invalid(v)
     }

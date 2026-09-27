@@ -1,10 +1,9 @@
 package scala.scalanative
 package unsigned
 
-import scala.scalanative.meta.LinktimeInfo
-
 import java.lang.{Long => JLong}
 
+import scala.scalanative.meta.LinktimeInfo
 import scalanative.runtime.Intrinsics.{
   castLongToRawSize, divULong, remULong, ulongToDouble, ulongToFloat, unsignedOf
 }
@@ -343,7 +342,10 @@ object ULong {
   override def toString(): String = "object scala.ULong"
 
   @inline def valueOf(longValue: scala.Long): ULong = {
-    if (LinktimeInfo.isFreestanding) new ULong(longValue)   // no box cache on bare metal (256-entry array pinned in a small heap)
+    if (LinktimeInfo.isFreestanding)
+      new ULong(
+        longValue
+      ) // no box cache on bare metal (256-entry array pinned in a small heap)
     else valueOfCached(longValue)
   }
   @inline private def valueOfCached(longValue: scala.Long): ULong = {

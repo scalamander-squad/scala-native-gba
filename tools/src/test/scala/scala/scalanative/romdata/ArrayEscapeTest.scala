@@ -6,9 +6,10 @@ import java.nio.file.{Files, Path}
 import org.junit.Assert._
 import org.junit.Test
 
-/** The strict array-ownership gate of the link-time module evaluation: a module whose graph holds an array is
- *  ROM-resident only if no run-time code can store into that array, directly, through a helper that writes its
- *  parameter, through `java.util.Arrays.sort` or as the destination of `System.arraycopy`.
+/** The strict array-ownership gate of the link-time module evaluation: a module
+ *  whose graph holds an array is ROM-resident only if no run-time code can
+ *  store into that array, directly, through a helper that writes its parameter,
+ *  through `java.util.Arrays.sort` or as the destination of `System.arraycopy`.
  */
 class ArrayEscapeTest extends OptimizerSpec {
 
@@ -45,10 +46,11 @@ class ArrayEscapeTest extends OptimizerSpec {
     System.setProperty("scalanative.romdata", "true")
     System.setProperty("scalanative.romdata.log", log.toString)
     try body
-    finally old.foreach {
-      case (k, Some(v)) => System.setProperty(k, v)
-      case (k, None)    => System.clearProperty(k)
-    }
+    finally
+      old.foreach {
+        case (k, Some(v)) => System.setProperty(k, v)
+        case (k, None)    => System.clearProperty(k)
+      }
   }
 
   @Test def strictModeFailsTheLink(): Unit = {
@@ -56,10 +58,17 @@ class ArrayEscapeTest extends OptimizerSpec {
     withRomdata(log) {
       System.setProperty("scalanative.romdata.strict", "Written.*|Family.*")
       try {
-        optimize("Test", sources) { case _ => fail("strict mode should fail the link") }
+        optimize("Test", sources) {
+          case _ => fail("strict mode should fail the link")
+        }
       } catch {
         case e: build.BuildException =>
-          assertTrue(e.getMessage, e.getMessage.contains("strict mode") && e.getMessage.contains("WrittenViaSort$"))
+          assertTrue(
+            e.getMessage,
+            e.getMessage.contains("strict mode") && e.getMessage.contains(
+              "WrittenViaSort$"
+            )
+          )
           assertFalse(e.getMessage, e.getMessage.contains("Family$"))
       } finally System.clearProperty("scalanative.romdata.strict")
     }
@@ -75,12 +84,33 @@ class ArrayEscapeTest extends OptimizerSpec {
           val text = new String(Files.readAllBytes(log), "UTF-8")
           for (m <- Seq("ReadOnly", "ReadViaArraycopy", "Family", "Helpers"))
             assertTrue(s"$m should be ROM-resident\n$text", isRom(m))
-          for (m <- Seq("WrittenDirect", "WrittenViaHelper", "WrittenViaIdentity", "WrittenViaSort", "WrittenViaArraycopy"))
+          for (m <- Seq(
+                "WrittenDirect",
+                "WrittenViaHelper",
+                "WrittenViaIdentity",
+                "WrittenViaSort",
+                "WrittenViaArraycopy"
+              ))
             assertFalse(s"$m must stay at run time\n$text", isRom(m))
           // the log names the candidate and the offending store site
-          assertTrue(text, text.contains("RT   WrittenViaHelper$") && text.contains("Helpers$D4fill"))
-          assertTrue(text, text.contains("RT   WrittenViaSort$") && text.contains("java.util.Arrays"))
-          assertTrue(text, text.contains("RT   WrittenViaArraycopy$") && text.contains("memmove"))
+          assertTrue(
+            text,
+            text.contains("RT   WrittenViaHelper$") && text.contains(
+              "Helpers$D4fill"
+            )
+          )
+          assertTrue(
+            text,
+            text.contains("RT   WrittenViaSort$") && text.contains(
+              "java.util.Arrays"
+            )
+          )
+          assertTrue(
+            text,
+            text.contains("RT   WrittenViaArraycopy$") && text.contains(
+              "memmove"
+            )
+          )
       }
     }
   }

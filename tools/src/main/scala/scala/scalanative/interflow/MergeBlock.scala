@@ -90,7 +90,10 @@ private[interflow] final class MergeBlock(
 
     block.end.emit.foreach {
       case let @ nir.Inst.Let(id, op, unwind: nir.Next.Unwind) =>
-        result += nir.Inst.Let(id, op, mergeUnwind(unwind))(let.pos, let.scopeId)
+        result += nir.Inst.Let(id, op, mergeUnwind(unwind))(
+          let.pos,
+          let.scopeId
+        )
       // throws of an inlined callee redirected to this block's handler
       case thr @ nir.Inst.Throw(v, unwind: nir.Next.Unwind) =>
         result += nir.Inst.Throw(v, mergeUnwind(unwind))(thr.pos)

@@ -2,7 +2,6 @@ package scala.scalanative
 package unsigned
 
 import scala.scalanative.meta.LinktimeInfo
-
 import scalanative.runtime.Intrinsics.{castIntToRawSize, unsignedOf}
 
 /** `UShort`, a 16-bit unsigned integer. */
@@ -318,7 +317,10 @@ object UShort {
   implicit def ubyte2ulong(x: UShort): ULong = x.toULong
 
   @inline def valueOf(shortValue: scala.Short): UShort = {
-    if (LinktimeInfo.isFreestanding) new UShort(shortValue)   // no box cache on bare metal (256-entry array pinned in a small heap)
+    if (LinktimeInfo.isFreestanding)
+      new UShort(
+        shortValue
+      ) // no box cache on bare metal (256-entry array pinned in a small heap)
     else valueOfCached(shortValue)
   }
   @inline private def valueOfCached(shortValue: scala.Short): UShort = {

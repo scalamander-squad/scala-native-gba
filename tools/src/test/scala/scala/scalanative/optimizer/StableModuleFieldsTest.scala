@@ -6,10 +6,10 @@ import org.junit._
 
 import scala.scalanative.OptimizerSpec
 
-/** A module `val` holding a function literal is a stable field: loads of it
- *  get the exact type of the lambda class, the call through it devirtualises
- *  and inlines, and the tuple / box the callee returns are scalar-replaced.
- *  See interflow.StableFields and Inline.returnsFreshAllocation.
+/** A module `val` holding a function literal is a stable field: loads of it get
+ *  the exact type of the lambda class, the call through it devirtualises and
+ *  inlines, and the tuple / box the callee returns are scalar-replaced. See
+ *  interflow.StableFields and Inline.returnsFreshAllocation.
  */
 class StableModuleFieldsTest extends OptimizerSpec {
 
