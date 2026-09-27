@@ -27,6 +27,22 @@ private[interflow] final class MergeProcessor(
         local -> offset
     }.toMap
   val blocks = mutable.Map.empty[nir.Local, MergeBlock]
+
+  /** True when this processor evaluates an inlined callee. */
+  def isInline: Boolean = doInline
+
+  /** The values the processed body was entered with (the arguments of the
+   *  inlined call). In inline mode they may be virtual objects owned by the
+   *  caller, which the caller keeps using after the call. */
+  var entryArgs: Seq[nir.Val] = Seq.empty
+
+  /** Locals of `insts` that are live on entry to each label (block
+   *  parameters excluded), following normal and exceptional successors.
+   *  Used to decide which values an exception handler can observe (see
+   *  Eval.run: only those are escaped before an instruction that may unwind
+   *  to it). */
+  lazy val liveIn: collection.Map[nir.Local, Set[nir.Local]] =
+    MergeProcessor.liveness(insts)
   val todo = mutable.SortedSet.empty[nir.Local](using Ordering.by(offsets))
 
   object currentSize extends Function0[Int] { // context-cached function
@@ -616,9 +632,84 @@ private[interflow] object MergeProcessor {
     val entryState = new State(entryMergeBlock.id)(eval.preserveDebugInfo)
     entryState.inherit(state, args)
 
+    builder.entryArgs = args
     entryMergeBlock.incoming(nir.Local(-1)) = (args, entryState)
     builder.todo += entryName
     builder
+  }
+
+  /** Live-in locals per label of a method body (standard backward
+   *  dataflow). Uses are every `Val.Local` an instruction mentions; defs are
+   *  label parameters, `Let` ids and the exception locals of unwind edges.
+   *  Successors are the control-flow targets and the unwind handlers of
+   *  every instruction of the block. */
+  def liveness(
+      insts: Array[nir.Inst]
+  ): collection.Map[nir.Local, Set[nir.Local]] = {
+    final class Blk(val label: nir.Local) {
+      val uses = mutable.Set.empty[nir.Local]
+      val defs = mutable.Set.empty[nir.Local]
+      val succs = mutable.UnrolledBuffer.empty[nir.Local]
+    }
+    class Uses(into: mutable.Set[nir.Local]) extends nir.Transform {
+      override def onVal(value: nir.Val): nir.Val = {
+        value match {
+          case nir.Val.Local(id, _) => into += id
+          case _                    => ()
+        }
+        super.onVal(value)
+      }
+      override def onType(ty: nir.Type): nir.Type = ty
+    }
+    val blks = mutable.UnrolledBuffer.empty[Blk]
+    var cur: Blk = null
+    def next(n: nir.Next): Unit = n match {
+      case nir.Next.Unwind(exc, target) =>
+        cur.defs += exc.id
+        next(target)
+      case nir.Next.Label(id, _) => cur.succs += id
+      case nir.Next.Case(_, target) => next(target)
+      case _                        => ()
+    }
+    insts.foreach { inst =>
+      inst match {
+        case nir.Inst.Label(id, params) =>
+          cur = new Blk(id)
+          blks += cur
+          params.foreach(p => cur.defs += p.id)
+        case _ if cur == null => ()
+        case inst =>
+          new Uses(cur.uses).onInst(inst)
+          inst match {
+            case nir.Inst.Let(id, _, unwind) =>
+              cur.defs += id
+              next(unwind)
+            case nir.Inst.Jump(n)        => next(n)
+            case nir.Inst.If(_, t, e)    => next(t); next(e)
+            case nir.Inst.Switch(_, d, cases) =>
+              next(d); cases.foreach(next)
+            case nir.Inst.Throw(_, unwind)    => next(unwind)
+            case nir.Inst.Unreachable(unwind) => next(unwind)
+            case _                            => ()
+          }
+      }
+    }
+    blks.foreach(b => b.uses --= b.defs)
+    val live = mutable.HashMap.empty[nir.Local, Set[nir.Local]]
+    blks.foreach(b => live(b.label) = b.uses.toSet)
+    var changed = true
+    while (changed) {
+      changed = false
+      blks.reverseIterator.foreach { b =>
+        val out = b.succs.iterator.flatMap(s => live.getOrElse(s, Set.empty))
+        val in = live(b.label) ++ out.filterNot(b.defs.contains)
+        if (in.size != live(b.label).size) {
+          live(b.label) = in
+          changed = true
+        }
+      }
+    }
+    live
   }
 
   private val emptyScopeMapping: nir.ScopeId => nir.ScopeId = _ =>

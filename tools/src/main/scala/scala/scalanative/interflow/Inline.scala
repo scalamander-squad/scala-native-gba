@@ -37,10 +37,14 @@ private[interflow] trait Inline { self: Interflow =>
         def calleeTooBig = defn.insts.size > maxCalleeSize
         def callerTooBig = mergeProcessor.currentSize() > maxCallerSize
         def inlineDepthLimitExceeded = inliningBacktrace.size > maxInlineDepth
-        def hasUnwind = defn.hasUnwind
-        // A call evaluated inside a try block: the callee's throws would have
-        // to be redirected to the handler, which inlining does not do.
-        def callSiteUnwinds = state.unwind ne nir.Next.None
+        // A callee with its own try blocks, or a call evaluated inside a try
+        // block: inlined only with Opt.inlineUnderTry, which processes the
+        // callee's handlers per instruction and makes every inlined
+        // instruction (and every callee `throw` without a handler) unwind to
+        // the call site's handler (Eval.run `attachUnwind`).
+        def hasUnwind = defn.hasUnwind && !Opt.inlineUnderTry
+        def callSiteUnwinds =
+          (state.unwind ne nir.Next.None) && !Opt.inlineUnderTry
         /* Every `ret` of the callee returns an object the callee itself
          * allocated (a tuple, an option, a box, a small case class): inlined,
          * that allocation becomes a virtual instance in the caller and is
@@ -220,10 +224,11 @@ private[interflow] trait Inline { self: Interflow =>
             block.cf match {
               case _: nir.Inst.Ret =>
                 ()
-              case nir.Inst.Throw(value, unwind) =>
-                val excv = block.end.materialize(value)
-                emit ++= block.toInsts().init
-                emit.raise(excv, unwind)
+              case inst @ nir.Inst.Throw(value, unwind) =>
+                // toInsts maps the unwind edge (a handler of the callee) to
+                // its merged block.
+                block.cf = nir.Inst.Throw(block.end.materialize(value), unwind)(inst.pos)
+                emit ++= block.toInsts()
               case _ =>
                 emit ++= block.toInsts()
             }
