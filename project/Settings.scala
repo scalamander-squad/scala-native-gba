@@ -620,21 +620,22 @@ object Settings {
       scalaVersion: String,
       log: sbt.util.Logger
   ): List[File] = {
+    // gba5: Scala 2.12 (sbt 1.x) rendering of upstream's Scala 3 syntax (upstream builds with sbt 2)
+    val Since = "scala-since_(.+)".r
+    val Until = "scala-until_(.+)".r
+    val Between = "scala-between_([^_]+)_(.+)".r
     def parseVersionRange(dirName: String): Option[VersionsRange] =
       dirName match {
-        case s"scala-since_${Version(version)}" =>
-          Some:
-            VersionsRange(start = version, end = Version.Max)
-        case s"scala-until_${Version(version)}" =>
-          Some:
-            VersionsRange(start = Version.Min, end = version)
-        case s"scala-between_${Version(start)}_${Version(end)}" =>
-          Some:
-            VersionsRange(start = start, end = end)
+        case Since(v) =>
+          Version.parse(v).map(version => VersionsRange(start = version, end = Version.Max))
+        case Until(v) =>
+          Version.parse(v).map(version => VersionsRange(start = Version.Min, end = version))
+        case Between(s, e) =>
+          for { start <- Version.parse(s); end <- Version.parse(e) } yield VersionsRange(start = start, end = end)
         case _ => None
       }
     val currentVersion = Version
-      .unapply(scalaVersion)
+      .parse(scalaVersion)
       .getOrElse(sys.error(s"Invalid Scala version: $scalaVersion"))
 
     sbt.IO
@@ -644,15 +645,15 @@ object Settings {
         parseVersionRange(dir.name)
           .exists(_.contains(currentVersion))
       }
-      .toList
-      .match {
-        case List(dir) => List(dir)
-        case Nil       => Nil
-        case dirs      =>
-          log.error:
-            s"Multiple Scala version ranges found for $scalaVersion: ${dirs.map(_.name).mkString(", ")}"
-          Nil
-      }
+      .toList match {
+      case List(dir) => List(dir)
+      case Nil       => Nil
+      case dirs      =>
+        log.error(
+          s"Multiple Scala version ranges found for $scalaVersion: ${dirs.map(_.name).mkString(", ")}"
+        )
+        Nil
+    }
   }
 
   lazy val compilerPluginSettings = Def.settings(
@@ -1120,9 +1121,9 @@ case class Version(major: Int, minor: Int, patch: Int)
 object Version {
   val Min = Version(0, 0, 0)
   val Max = Version(Byte.MaxValue, Byte.MaxValue, Byte.MaxValue)
-  given ordering: Ordering[Version] =
-    Ordering.by(v => (v.major, v.minor, v.patch))
-  def unapply(str: String): Option[Version] =
+  implicit val ordering: Ordering[Version] =
+    Ordering.by((v: Version) => (v.major, v.minor, v.patch))
+  def parse(str: String): Option[Version] =
     str
       .split("[.\\-]")
       .take(3)
