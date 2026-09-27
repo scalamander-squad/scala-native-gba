@@ -40,6 +40,9 @@ object LinktimeInfo {
   @resolvedAtLinktime
   def isNetBSD: Boolean = target.os == "netbsd"
 
+  @resolvedAtLinktime
+  def isMusl: Boolean = target.env == "musl"
+
   @resolvedAtLinktime("scala.scalanative.meta.linktimeinfo.is32BitPlatform")
   def is32BitPlatform: Boolean = resolved
 
@@ -57,7 +60,8 @@ object LinktimeInfo {
   @resolvedAtLinktime()
   def isContinuationsSupported: Boolean =
     (isLinux || isMac || isFreeBSD || isOpenBSD || isNetBSD) &&
-      (target.arch != "arm" && !is32BitPlatform)
+      !is32BitPlatform &&
+      (target.arch == "x86_64" || target.arch == "aarch64")
 
   @resolvedAtLinktime()
   def isVirtualThreadsSupported: Boolean =

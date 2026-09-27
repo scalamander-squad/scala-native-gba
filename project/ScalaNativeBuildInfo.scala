@@ -17,9 +17,9 @@ import org.eclipse.jgit.storage.file.FileRepositoryBuilder
 // It defines only values referenced and required to bootstrap build
 object ScalaNativeBuildInfo {
   // The next version to be released
-  private val baseVersion = "0.5.12"
-  // Suffix for locally published builds of this patched tree (spikes/scala-native-fork)
-  private val localForkTag = "gba6"
+  private val baseVersion = "0.5.13"
+  // Suffix for locally published builds of this patched tree (README-FORK.md)
+  private val localForkTag = "gba7"
 
   // Calculation of the version to use based on CI / env state
   val version = envOrNone("GITHUB_REF_TYPE") match {
