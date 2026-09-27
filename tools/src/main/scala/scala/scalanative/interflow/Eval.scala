@@ -80,26 +80,99 @@ private[interflow] trait Eval { self: Interflow =>
     import state.{materialize, delay}
 
     /* Evaluates the unwind handler of an instruction inside a try block:
-     * escapes everything (the handler may observe any object allocated so
-     * far, and nothing may be materialized after the instruction on its
-     * behalf), binds the exception to a fresh local and evaluates the
-     * handler arguments. Each unwind site gets its own exception local, as
-     * Lower generates one landing pad label (with `exc` as parameter) per
-     * distinct `Next.Unwind`. */
-    def evalUnwind(unwind: nir.Next)(implicit
+     * binds the exception to a fresh local and evaluates the handler
+     * arguments. Each unwind site gets its own exception local, as Lower
+     * generates one landing pad label (with `exc` as parameter) per distinct
+     * `Next.Unwind`.
+     *
+     * With `escape` (an instruction that continues normally after it, whose
+     * exceptional edge gets a snapshot of the state, see `unwindSnapshot`),
+     * every value the handler may observe is escaped first, so that nothing
+     * would have to be materialized on the exceptional edge (after the
+     * throwing instruction) and so that the handler sees memory in program
+     * order even if the instruction (e.g. an inlined callee) mutates it:
+     *  - the values of the locals live on entry to the handler (liveness over
+     *    the body being processed) and of all `var` slots, and everything
+     *    they reach;
+     *  - in an inlined body, the virtual objects reachable from the call's
+     *    arguments, which belong to the caller and outlive the call, except
+     *    boxes (immutable, so the caller's copy stays exact). Scala code
+     *    cannot reach any other virtual object.
+     * Other virtual objects stay virtual on the normal path and are simply
+     * absent on the exceptional one. `-Dscalanative.interflow.tryEscapeAll=
+     * true` restores the old rule (escape the whole state). */
+    def evalUnwind(unwind: nir.Next, escape: Boolean)(implicit
         srcPosition: nir.SourcePosition,
         scopeId: nir.ScopeId
     ): nir.Next = unwind match {
       case nir.Next.None =>
         unwind
       case nir.Next.Unwind(exc, nir.Next.Label(target, args)) =>
-        state.escapeAll()
+        if (escape) {
+          if (Opt.tryEscapeAll) state.escapeAll()
+          else escapeForHandler(target)
+        }
         val excLocal = nir.Val.Local(state.fresh(), exc.ty)
         state.storeLocal(exc.id, excLocal)
         val evaluatedArgs = args.map(arg => materialize(eval(arg)))
         nir.Next.Unwind(excLocal, nir.Next.Label(target, evaluatedArgs))
       case _ =>
         unreachable
+    }
+
+    def escapeForHandler(target: nir.Local)(implicit
+        srcPosition: nir.SourcePosition,
+        scopeId: nir.ScopeId
+    ): Unit = {
+      val processor = mergeProcessor
+      def escapeLocal(local: nir.Local): Unit =
+        state.locals.get(local) match {
+          case Some(value) => state.locals(local) = materialize(value)
+          case None        => ()
+        }
+      processor.liveIn.getOrElse(target, Set.empty).foreach(escapeLocal)
+      // `var` slots (State.newVar: negative ids, reached through the var's
+      // local) are cells the handler may read: always escape their values.
+      state.locals.keys.filter(_.id < 0).toSeq.foreach(escapeLocal)
+      if (processor.isInline) {
+        state.heapClosure(processor.entryArgs).foreach { addr =>
+          state.heap.get(addr) match {
+            case Some(inst: VirtualInstance) if inst.kind != BoxKind =>
+              materialize(nir.Val.Virtual(addr))
+            case _ => ()
+          }
+        }
+      }
+    }
+
+    /* Every instruction emitted while evaluating an instruction that has an
+     * unwind handler must unwind to it: the ones `State.emit` produced carry
+     * it already; the bodies of callees inlined at this call site, polymorphic
+     * inline dispatch and other direct `emit.*` users do not. Instructions of
+     * an inlined callee that have their own handler keep it (the callee's
+     * handler rethrows to ours through its own instructions). A `throw`
+     * without handler becomes a throw to ours. */
+    def attachUnwind(from: Int, unwind: nir.Next): Unit = {
+      val all = state.emit.toSeq
+      var changed = false
+      val patched = all.iterator.zipWithIndex.map {
+        case (inst, idx) if idx < from => inst
+        case (let @ nir.Inst.Let(id, op, nir.Next.None), _) =>
+          changed = true
+          nir.Inst.Let(id, op, unwind)(let.pos, let.scopeId)
+        case (thr @ nir.Inst.Throw(v, nir.Next.None), _) =>
+          changed = true
+          nir.Inst.Throw(v, unwind)(thr.pos)
+        case (u @ nir.Inst.Unreachable(nir.Next.None), _) =>
+          changed = true
+          nir.Inst.Unreachable(unwind)(u.pos)
+        case (inst, _) => inst
+      }.toVector
+      if (changed) {
+        val builder = new nir.InstructionBuilder()(state.fresh)
+        builder ++= patched
+        state.emit = builder
+      }
     }
 
     var pc = offsets(from)
@@ -139,7 +212,7 @@ private[interflow] trait Eval { self: Interflow =>
               // handler as an exceptional successor of this block. The block
               // ends right after this instruction (Opt.splitAtUnwind), so the
               // snapshot taken here is the state on that edge.
-              val evaluatedUnwind = evalUnwind(unwind)
+              val evaluatedUnwind = evalUnwind(unwind, escape = true)
               val emitCountBefore = state.emit.size
               val emittedBefore = state.emitted.clone()
               state.unwind = evaluatedUnwind
@@ -147,6 +220,7 @@ private[interflow] trait Eval { self: Interflow =>
                 try eval(op)
                 finally state.unwind = nir.Next.None
               if (state.emit.size > emitCountBefore) {
+                attachUnwind(emitCountBefore, evaluatedUnwind)
                 val nir.Next.Unwind(_, next: nir.Next.Label) =
                   evaluatedUnwind: @unchecked
                 state.unwindEdges += ((
@@ -154,6 +228,13 @@ private[interflow] trait Eval { self: Interflow =>
                   state.unwindSnapshot(emitCountBefore, emittedBefore)
                 ))
               }
+              // The exception local exists only on the exceptional edge (it
+              // is bound by the landing pad). Optimised bodies being inlined
+              // may still mention it on the normal path (dead phi inputs of
+              // an earlier optimisation), where it must not resolve to a
+              // local that is never defined there.
+              val nir.Next.Unwind(origExc, _) = unwind: @unchecked
+              state.storeLocal(origExc.id, nir.Val.Zero(origExc.ty).canonicalize)
               v
           }
           if (preserveDebugInfo) {
@@ -230,11 +311,11 @@ private[interflow] trait Eval { self: Interflow =>
           if ((unwind ne nir.Next.None) && !Opt.perInstructionTryCatch)
             throw BailOut("try-catch")
           val excv = eval(v)
-          return nir.Inst.Throw(excv, evalUnwind(unwind))
+          return nir.Inst.Throw(excv, evalUnwind(unwind, escape = false))
         case nir.Inst.Unreachable(unwind) =>
           if ((unwind ne nir.Next.None) && !Opt.perInstructionTryCatch)
             throw BailOut("try-catch")
-          return nir.Inst.Unreachable(evalUnwind(unwind))
+          return nir.Inst.Unreachable(evalUnwind(unwind, escape = false))
         case _ =>
           bailOut
       }

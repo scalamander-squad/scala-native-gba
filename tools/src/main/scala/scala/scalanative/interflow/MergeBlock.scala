@@ -40,11 +40,27 @@ private[interflow] final class MergeBlock(
       }
       nir.Next.Label(nextBlock.id, mergeValues)
     }
+    /* Unwind edges this block owns: the handler of the instruction evaluated
+     * under try (`unwindEdges`) and the one of a throwing terminator. Other
+     * unwind edges in `end.emit` belong to handlers of inlined callees and
+     * were already mapped to merged blocks by the callee's processor. */
+    lazy val ownUnwinds: Seq[nir.Next.Label] = {
+      val fromCf = block.cf match {
+        case nir.Inst.Throw(_, nir.Next.Unwind(_, l: nir.Next.Label)) => Seq(l)
+        case nir.Inst.Unreachable(nir.Next.Unwind(_, l: nir.Next.Label)) =>
+          Seq(l)
+        case _ => Nil
+      }
+      block.end.unwindEdges.map(_._1).toSeq ++ fromCf
+    }
     def mergeUnwind(next: nir.Next): nir.Next = next match {
       case nir.Next.None =>
         next
-      case nir.Next.Unwind(exc, next: nir.Next.Label) =>
+      case nir.Next.Unwind(exc, next: nir.Next.Label)
+          if ownUnwinds.exists(_ eq next) =>
         nir.Next.Unwind(exc, mergeNext(next))
+      case _: nir.Next.Unwind =>
+        next
       case _ =>
         util.unreachable
     }
@@ -75,6 +91,11 @@ private[interflow] final class MergeBlock(
     block.end.emit.foreach {
       case let @ nir.Inst.Let(id, op, unwind: nir.Next.Unwind) =>
         result += nir.Inst.Let(id, op, mergeUnwind(unwind))(let.pos, let.scopeId)
+      // throws of an inlined callee redirected to this block's handler
+      case thr @ nir.Inst.Throw(v, unwind: nir.Next.Unwind) =>
+        result += nir.Inst.Throw(v, mergeUnwind(unwind))(thr.pos)
+      case u @ nir.Inst.Unreachable(unwind: nir.Next.Unwind) =>
+        result += nir.Inst.Unreachable(mergeUnwind(unwind))(u.pos)
       case inst =>
         result += inst
     }
