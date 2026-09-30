@@ -10,7 +10,9 @@
 # Opening PRs with GITHUB_TOKEN also needs Settings > Actions > "Allow GitHub Actions to create and approve pull
 # requests" (not needed with the PAT).
 #
-# Not covered here: device/ROM checks and the `-gbaN` version bump; do those locally after merging the PR
+# After the JVM tests it publishes the merged fork locally, builds the GBA test ROM (gba-testrom/) and runs it headless in
+# libmgba; the verdict goes into the PR body (a failing ROM opens an issue instead of a PR). The ROM is never uploaded.
+# Not covered here: the game's device checks and the `-gbaN` version bump; do those locally after merging the PR
 # (see README-FORK.md, "Merging upstream").
 name: Upstream sync
 
@@ -47,6 +49,8 @@ jobs:
       DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
       GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
       JAVA_TOOL_OPTIONS: -Xss16m
+      ARM_GNU_VERSION: 14.3.rel1 # GBA test ROM toolchain (Arm GNU, matches the local builds)
+      MGBA_VERSION: 0.10.5 # libmgba for the headless test ROM run
     steps:
       - uses: actions/checkout@v7
         with:
@@ -140,6 +144,86 @@ jobs:
           scala.scalanative.optimizer.DuplicateUnusedParamsTest
           scala.scalanative.codegen.MemoryLayoutTest"
 
+      # ---- GBA test ROM: publish the merged fork locally, build gba-testrom/ and run it headlessly in libmgba ----
+      # The ROM and ELF stay on the runner (gba-testrom/out/ is gitignored); only the log and verdict are reported.
+      - name: Cache Arm GNU toolchain and libmgba
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/arm-gnu-toolchain
+            ~/mgba-build
+          key: gba-testrom-${{ runner.os }}-${{ runner.arch }}-arm-${{ env.ARM_GNU_VERSION }}-mgba-${{ env.MGBA_VERSION }}
+
+      - name: Install GBA test ROM toolchain (clang, Arm GNU 14.3.rel1, libmgba 0.10.5)
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends clang cmake
+          clang --version | head -1
+          if [ ! -x ~/arm-gnu-toolchain/bin/arm-none-eabi-gcc ]; then
+            mkdir -p ~/arm-gnu-toolchain
+            curl -fsSL "https://developer.arm.com/-/media/Files/downloads/gnu/$ARM_GNU_VERSION/binrel/arm-gnu-toolchain-$ARM_GNU_VERSION-x86_64-arm-none-eabi.tar.xz" \
+              | tar -xJ --strip-components=1 -C ~/arm-gnu-toolchain
+          fi
+          echo "$HOME/arm-gnu-toolchain/bin" >> "$GITHUB_PATH"
+          ~/arm-gnu-toolchain/bin/arm-none-eabi-gcc --version | head -1
+          git clone -q --depth 1 --branch "$MGBA_VERSION" https://github.com/mgba-emu/mgba ~/mgba-src
+          if [ ! -f ~/mgba-build/libmgba.a ]; then
+            cmake -S ~/mgba-src -B ~/mgba-build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_STATIC=ON -DBUILD_SHARED=OFF -DBUILD_QT=OFF -DBUILD_SDL=OFF -DBUILD_LTO=OFF -DBUILD_PERF=OFF \
+              -DBUILD_TEST=OFF -DBUILD_SUITE=OFF -DBUILD_CINEMA=OFF -DBUILD_EXAMPLE=OFF -DBUILD_ROM_TEST=OFF \
+              -DBUILD_LIBRETRO=OFF -DBUILD_GL=OFF -DBUILD_GLES2=OFF -DBUILD_GLES3=OFF -DM_CORE_GB=OFF -DUSE_LUA=OFF \
+              -DUSE_PNG=OFF -DUSE_ZLIB=OFF -DUSE_LIBZIP=OFF -DUSE_MINIZIP=OFF -DUSE_LZMA=OFF -DUSE_SQLITE3=OFF \
+              -DUSE_ELF=OFF -DUSE_FFMPEG=OFF -DUSE_DEBUGGERS=OFF -DUSE_GDB_STUB=OFF -DUSE_EDITLINE=OFF \
+              -DUSE_EPOXY=OFF -DUSE_DISCORD_RPC=OFF > /dev/null
+            make -C ~/mgba-build -j"$(nproc)" mgba > /dev/null
+          fi
+
+      - name: Publish the merged fork locally (Scala 3.9.0 artifacts)
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        timeout-minutes: 30
+        env:
+          SBT_OPTS: -Xmx6G -Xss4M -XX:+UseParallelGC
+        # Without CI in the environment the build's version is <baseVersion>-<localForkTag> (project/ScalaNativeBuildInfo.scala),
+        # the version gba-testrom/build.sh resolves; these are the Scala 3 commands of the local publish script.
+        run: >
+          env -u CI sbt -batch "++3.9.0;
+          nscplugin3/publishLocal; nirJVM3/publishLocal; utilJVM3/publishLocal;
+          nativelib3/publishLocal; clib3/publishLocal; posixlib3/publishLocal; windowslib3/publishLocal;
+          javalib3/publishLocal; auxlib3/publishLocal; scalalib3/publishLocal; scala3lib3/publishLocal;
+          toolsJVM3/publishLocal"
+
+      - name: Build and run the GBA test ROM (headless mGBA)
+        id: testrom
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        continue-on-error: false
+        timeout-minutes: 15
+        env:
+          MGBA_LIBS: -lm -lpthread
+        run: |
+          export MGBA_SRC="$HOME/mgba-src" MGBA_BUILD="$HOME/mgba-build"
+          set -o pipefail
+          gba-testrom/build.sh 2>&1 | grep -vE 'RWX|GNU-stack|deprecated|__sync_synchronize|sync-\{|avoid this warning|garbage collection' | tee "$RUNNER_TEMP/testrom-build.log"
+          status=0
+          gba-testrom/run.sh 2>&1 | tee "$RUNNER_TEMP/testrom.log" || status=$?
+          echo "verdict=$(grep -m1 '^VERDICT:' "$RUNNER_TEMP/testrom.log" | sed 's/^VERDICT: //')" >> "$GITHUB_OUTPUT"
+          echo "summary=$(grep -m1 'TESTROM ' "$RUNNER_TEMP/testrom.log" | sed 's/^\[rom\] //')" >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Report GBA test ROM failure
+        if: failure() && env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean' && steps.testrom.outcome == 'failure'
+        run: |
+          gh label create upstream-sync --color 0E8A16 2>/dev/null || true
+          {
+            echo "The upstream merge (\`${{ steps.merge.outputs.range }}\`) is clean and the JVM tests pass, but the GBA test ROM (\`gba-testrom/\`) did not pass: ${{ steps.testrom.outputs.verdict || 'build failed' }}"
+            echo; echo "Checks that failed (from the mGBA debug log):"; echo '```'
+            grep -E '^\[rom\] (FAIL|halt)|^VERDICT|^result block' "$RUNNER_TEMP/testrom.log" 2>/dev/null || tail -40 "$RUNNER_TEMP/testrom-build.log"
+            echo '```'
+            echo "The branch was not pushed. Reproduce locally: see README-FORK.md, \"GBA test ROM\"."
+            echo; echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue.md"
+          gh issue create --label upstream-sync --title "Upstream sync: GBA test ROM failed on ${{ steps.merge.outputs.range }}" --body-file "$RUNNER_TEMP/issue.md"
+
       - name: Push branch and open PR
         if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
         run: |
@@ -162,7 +246,12 @@ jobs:
           {
             echo "Merge of upstream \`main\` (\`${{ steps.merge.outputs.range }}\`) into \`$BASE\`. Clean merge; \`toolsJVM3/testFull\` (Scala 3.9.0) and the fork test classes (toolsJVM2_13) pass."
             echo
-            echo "Not checked here: device/ROM checks (play ROM, lockstep equivalence, boot to Birch) and the \`-gbaN\` version bump; do these locally before/after merging."
+            echo "GBA test ROM (\`gba-testrom/\`, built with the merged fork published locally, run headless in libmgba 0.10.5): **${{ steps.testrom.outputs.verdict }}** — ${{ steps.testrom.outputs.summary }}"
+            echo; echo "<details><summary>Test ROM log</summary>"; echo; echo '```'
+            grep -E '^\[rom\]|^VERDICT|^result block' "$RUNNER_TEMP/testrom.log"
+            echo '```'; echo "</details>"
+            echo
+            echo "Not checked here: the game's device checks (play ROM, lockstep equivalence, boot to Birch) and the \`-gbaN\` version bump; do these locally before/after merging."
             echo
             echo "Upstream commits:"; cat "$RUNNER_TEMP/commits.md"
           } > "$RUNNER_TEMP/pr.md"

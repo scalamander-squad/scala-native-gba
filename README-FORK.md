@@ -35,8 +35,23 @@ It is not affiliated with or endorsed by the Scala Native project, EPFL or the S
 - **Automatic upstream sync:** `.github/workflows/upstream-sync.yml` runs weekly (Mondays 06:00 UTC, or manually with
   `base`/`dry_run` inputs). It merges `scala-native/scala-native` `main` into `upstream-sync/<date>` (never rebase), runs
   `toolsJVM3/testFull` (Scala 3.9.0) and our test classes on `toolsJVM2_13`, and opens a PR to `main`; on conflict it
-  opens or updates an issue labelled `upstream-sync`. Upstream merges often touch `.github/workflows/**`, which
+  opens or updates an issue labelled `upstream-sync`. After the tests it publishes the merge locally and runs the GBA
+  test ROM (below) in headless libmgba; a failing ROM opens an issue instead of a PR. Upstream merges often touch `.github/workflows/**`, which
   `GITHUB_TOKEN` cannot push, so add the repository secret `UPSTREAM_SYNC_TOKEN` (PAT with `repo` and `workflow` scopes);
-  without it a rejected push becomes an issue. Device checks and the `-gbaN` version bump are done locally after merging the PR.
+  without it a rejected push becomes an issue. The game's device checks and the `-gbaN` version bump are done locally after merging the PR.
+- **GBA test ROM (`gba-testrom/`):** a small original Scala 3 program (Apache-2.0, no game code or assets) with the
+  smallest runtime the freestanding mode needs (crt0, linker script, bump allocator, EHABI personality, mGBA debug-log
+  output) that boots on the GBA and self-checks what the patches are for: `Long`/`Double` field and array alignment,
+  exceptions caught inside `try` (also through polymorphic dispatch, division by zero, bounds, casts), inlining under
+  `try`, a module evaluated at link time whose instance and object graph lie in ROM (`0x08000000`+; the link also fails
+  if it is not ROM-resident), stable-module-field lambdas, strings/`StringBuilder`/boxing/collections from the trimmed
+  javalib, and the thread guards (`Thread.currentThread()` works; the link fails if any pthread or C `ThreadInfo` symbol
+  is referenced). Each check logs `PASS`/`FAIL <name>` to the mGBA debug log, then `TESTROM PASS`/`FAIL`; a result
+  block at `0x0203FFF0` carries the verdict. Locally, after a `publishLocal`: `gba-testrom/build.sh && gba-testrom/run.sh`
+  (needs `cs`, a JDK, `clang`, Arm GNU `arm-none-eabi-*` with newlib-nano, and a libmgba 0.10 build: `MGBA_SRC`,
+  `MGBA_BUILD`, `MGBA_LIBS`); `run.sh` exits non-zero unless the verdict is PASS. `ROMDATA=0 gba-testrom/build.sh`
+  disables the ROM-data pass and must make the romdata checks fail. The upstream-sync workflow runs it on every clean
+  merge and puts the verdict in the PR. ROMs are never published: `gba-testrom/out/`, `*.gba` and `*.elf` are ignored,
+  and CI uploads no artifacts.
 - **Licence:** Apache-2.0, as upstream (see `LICENSE.md`); our changes are offered under the same licence.
 - Fixes that are generally useful are intended to be proposed upstream following the project's contribution rules.
