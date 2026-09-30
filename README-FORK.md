@@ -32,5 +32,11 @@ It is not affiliated with or endorsed by the Scala Native project, EPFL or the S
   (`sbt -batch "++3.9.0; …/publishLocal; …"` — sbt 2 joins its arguments into one command line, so commands are
   `;`-separated), and the device checks in the GBA project (play ROM, lockstep equivalence against stock
   pokeemerald on the fast-forward scenarios, boot to Birch), which need a local emulator and toolchain.
+- **Automatic upstream sync:** `.github/workflows/upstream-sync.yml` runs weekly (Mondays 06:00 UTC, or manually with
+  `base`/`dry_run` inputs). It merges `scala-native/scala-native` `main` into `upstream-sync/<date>` (never rebase), runs
+  `toolsJVM3/testFull` (Scala 3.9.0) and our test classes on `toolsJVM2_13`, and opens a PR to `main`; on conflict it
+  opens or updates an issue labelled `upstream-sync`. Upstream merges often touch `.github/workflows/**`, which
+  `GITHUB_TOKEN` cannot push, so add the repository secret `UPSTREAM_SYNC_TOKEN` (PAT with `repo` and `workflow` scopes);
+  without it a rejected push becomes an issue. Device checks and the `-gbaN` version bump are done locally after merging the PR.
 - **Licence:** Apache-2.0, as upstream (see `LICENSE.md`); our changes are offered under the same licence.
 - Fixes that are generally useful are intended to be proposed upstream following the project's contribution rules.

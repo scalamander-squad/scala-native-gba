@@ -1,0 +1,169 @@
+# Weekly upstream sync for the fork.
+#
+# Merges scala-native/scala-native `main` into a dated branch `upstream-sync/<date>` (merge commit, never rebase),
+# runs the JVM tool tests, and opens a PR to the fork's `main`. On a merge conflict it aborts the merge and opens
+# (or updates) an issue labelled `upstream-sync` listing the conflicting files and the upstream range.
+#
+# TOKEN: the default GITHUB_TOKEN cannot push commits that touch `.github/workflows/**`, and upstream merges often
+# do. Add a repository secret `UPSTREAM_SYNC_TOKEN` (a PAT with `repo` and `workflow` scopes). It is used when set,
+# otherwise GITHUB_TOKEN. If the push is rejected, the job opens an issue explaining this instead of failing silently.
+# Opening PRs with GITHUB_TOKEN also needs Settings > Actions > "Allow GitHub Actions to create and approve pull
+# requests" (not needed with the PAT).
+#
+# Not covered here: device/ROM checks and the `-gbaN` version bump; do those locally after merging the PR
+# (see README-FORK.md, "Merging upstream").
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Fork branch to update"
+        default: main
+        required: true
+      dry_run:
+        description: "Report what would happen; do not push, open PRs or issues"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'scala-native/scala-native'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BASE: ${{ inputs.base || 'main' }}
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+      JAVA_TOOL_OPTIONS: -Xss16m
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base || 'main' }}
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Fetch upstream and merge
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/scala-native/scala-native
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Nothing new upstream."
+            echo "state=uptodate" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          short=$(git rev-parse --short upstream/main)
+          branch="upstream-sync/$(date -u +%F)"
+          range="$(git rev-parse --short HEAD)..$short"
+          {
+            echo "short=$short"
+            echo "branch=$branch"
+            echo "range=$range"
+          } >> "$GITHUB_OUTPUT"
+          git log --no-merges --format='- %h %s' HEAD..upstream/main | head -100 > "$RUNNER_TEMP/commits.md"
+          git checkout -b "$branch"
+          if git merge --no-ff -m "Merge upstream main $short" upstream/main; then
+            echo "state=clean" >> "$GITHUB_OUTPUT"
+            echo "Clean merge of $range"
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            git merge --abort
+            echo "state=conflict" >> "$GITHUB_OUTPUT"
+            echo "Conflicts merging $range:"; cat "$RUNNER_TEMP/conflicts.txt"
+          fi
+
+      - name: Dry run report
+        if: env.DRY_RUN == 'true' && steps.merge.outputs.state != 'uptodate'
+        run: |
+          echo "DRY RUN: merge of upstream ${{ steps.merge.outputs.range }} is ${{ steps.merge.outputs.state }}."
+          echo "Would push ${{ steps.merge.outputs.branch }} and open a PR to $BASE (clean), or an issue (conflict)."
+          echo "Upstream commits:"; cat "$RUNNER_TEMP/commits.md"
+          [ -f "$RUNNER_TEMP/conflicts.txt" ] && { echo "Conflicting files:"; cat "$RUNNER_TEMP/conflicts.txt"; }
+          exit 0
+
+      - name: Open or update conflict issue
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'conflict'
+        run: |
+          gh label create upstream-sync --color 0E8A16 --description "Upstream merge needs attention" 2>/dev/null || true
+          {
+            echo "Merging upstream \`main\` (\`${{ steps.merge.outputs.range }}\`) into \`$BASE\` conflicts."
+            echo
+            echo "Conflicting files:"; sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt"
+            echo
+            echo "Resolve locally: \`git fetch origin main && git merge origin/main\` (merge, never rebase), then see README-FORK.md, \"Merging upstream\"."
+            echo
+            echo "Upstream commits:"; cat "$RUNNER_TEMP/commits.md"
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue.md"
+          n=$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --title "Upstream sync conflict: ${{ steps.merge.outputs.range }}" --body-file "$RUNNER_TEMP/issue.md"
+          else
+            gh issue create --label upstream-sync --title "Upstream sync conflict: ${{ steps.merge.outputs.range }}" --body-file "$RUNNER_TEMP/issue.md"
+          fi
+
+      - name: Set up JDK 17 and sbt
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        uses: coursier/cache-action@v8
+      - if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        uses: coursier/setup-action@v3
+        with:
+          jvm: "17"
+          apps: sbt
+
+      - name: Test tools (Scala 3.9.0)
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        run: sbt -batch "++3.9.0; toolsJVM3/testFull"
+
+      - name: Test fork classes (Scala 2.13)
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        run: >
+          sbt -batch "toolsJVM2_13/testOnly
+          scala.scalanative.romdata.ArrayEscapeTest
+          scala.scalanative.optimizer.StableModuleFieldsTest
+          scala.scalanative.optimizer.InlineUnderTryTest
+          scala.scalanative.optimizer.DuplicateUnusedParamsTest
+          scala.scalanative.codegen.MemoryLayoutTest"
+
+      - name: Push branch and open PR
+        if: env.DRY_RUN != 'true' && steps.merge.outputs.state == 'clean'
+        run: |
+          branch="${{ steps.merge.outputs.branch }}"
+          if ! git push origin "$branch" 2> "$RUNNER_TEMP/push.err"; then
+            cat "$RUNNER_TEMP/push.err"
+            gh label create upstream-sync --color 0E8A16 2>/dev/null || true
+            {
+              echo "The upstream merge (\`${{ steps.merge.outputs.range }}\`) is clean and tests pass, but pushing \`$branch\` was rejected:"
+              echo; echo '```'; cat "$RUNNER_TEMP/push.err"; echo '```'
+              echo
+              echo "If this mentions \`workflow\` scope, GITHUB_TOKEN cannot push commits that change \`.github/workflows/**\`."
+              echo "Add a repository secret \`UPSTREAM_SYNC_TOKEN\` (PAT with \`repo\` + \`workflow\` scopes), or merge locally."
+              echo
+              echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            } > "$RUNNER_TEMP/issue.md"
+            gh issue create --label upstream-sync --title "Upstream sync push rejected: ${{ steps.merge.outputs.range }}" --body-file "$RUNNER_TEMP/issue.md"
+            exit 1
+          fi
+          {
+            echo "Merge of upstream \`main\` (\`${{ steps.merge.outputs.range }}\`) into \`$BASE\`. Clean merge; \`toolsJVM3/testFull\` (Scala 3.9.0) and the fork test classes (toolsJVM2_13) pass."
+            echo
+            echo "Not checked here: device/ROM checks (play ROM, lockstep equivalence, boot to Birch) and the \`-gbaN\` version bump; do these locally before/after merging."
+            echo
+            echo "Upstream commits:"; cat "$RUNNER_TEMP/commits.md"
+          } > "$RUNNER_TEMP/pr.md"
+          gh pr create --base "$BASE" --head "$branch" --title "Merge upstream main ${{ steps.merge.outputs.short }}" --body-file "$RUNNER_TEMP/pr.md"
