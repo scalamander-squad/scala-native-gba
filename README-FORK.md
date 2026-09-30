@@ -5,9 +5,9 @@ scalamander-squad for compiling Scala 3 to ARMv4T/Thumb for the Game Boy Advance
 It is not affiliated with or endorsed by the Scala Native project, EPFL or the Scala Center.
 
 - **Base:** upstream Scala Native `main` after v0.5.12 (version `0.5.13-SNAPSHOT`, the sbt 2 build), merged in
-  with its full history. The current toolchain is **`0.5.13-gba7`** (tag `v0.5.13-gba7`).
+  with its full history. The current toolchain is **`0.5.13-gba8`** (tag `v0.5.13-gba8`).
 - **Branch `main`:** our commits on top of v0.5.12, with upstream merged in by merge commits. Each stage is tagged:
-  `v0.5.12-gba1` … `v0.5.12-gba6` (on v0.5.12), then `v0.5.13-gba7` (the first upstream merge); `v0.5.12-romdata2`
+  `v0.5.12-gba1` … `v0.5.12-gba6` (on v0.5.12), then `v0.5.13-gba7` (the first upstream merge), `v0.5.13-gba8` (upstream catch-up; the scalafmt reformat in the "main branch and stage tags" commit is formatting only); `v0.5.12-romdata2`
   and `v0.5.12-gba4opt` mark the original development lines of the ROM-data pass and the optimiser patches, which
   were later applied onto `main`.
 - **What the patches do** (each commit describes one change):
@@ -20,7 +20,10 @@ It is not affiliated with or endorsed by the Scala Native project, EPFL or the S
     with a strict array-immutability analysis.
   - Freestanding runtime trims: no system property / environment / case tables, no box caches, empty stack traces
     on targets without an OS.
-- **Merging upstream:** upstream is merged, never rebased: `git fetch upstream main && git merge upstream/main`
+  - Single-threaded / freestanding guards (needed since upstream's threading rework): the exported thread start routine
+    runs threads only when multithreading is enabled, single-threaded builds allocate no pthread state, and
+    freestanding targets skip the C `ThreadInfo` writes at start-up and shutdown. Multithreaded builds are unchanged.
+- **Merging upstream:** upstream is merged, never rebased: `git fetch origin main && git merge origin/main` (`origin` is the upstream repository; `squad` is this fork)
   on a branch, conflicts resolved so that upstream's change and our semantics both survive; cherry-picks of upstream
   commits we took early are dropped in favour of upstream's own version. The local version is
   `<upstream base version>-gbaN` (`localForkTag` in `project/ScalaNativeBuildInfo.scala`). Before the result goes to
