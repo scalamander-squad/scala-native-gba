@@ -36,6 +36,12 @@ sealed trait NativeConfig {
   /** Use agbcc's four-byte APCS stack/call ABI for GBA Thumb targets. */
   def agbccAbi: Boolean
 
+  /** Generate the supported lowered-NIR subset as C for agbcc. */
+  def agbccCodegen: Boolean
+
+  /** When non-empty, route only these exported C symbol names to agbcc. */
+  def agbccCodegenExports: Set[String]
+
   /** The garbage collector to use. */
   def gc: GC
 
@@ -323,6 +329,12 @@ sealed trait NativeConfig {
 
   /** Enable the opt-in APCS ABI used by the original GBA toolchain. */
   def withAgbccAbi(value: Boolean): NativeConfig
+
+  /** Enable the fail-closed lowered-NIR to agbcc C backend. */
+  def withAgbccCodegen(value: Boolean): NativeConfig
+
+  /** Limit the experimental agbcc backend to named exported C symbols. */
+  def withAgbccCodegenExports(value: Set[String]): NativeConfig
 }
 
 object NativeConfig {
@@ -342,6 +354,8 @@ object NativeConfig {
       cppOptions = Seq.empty,
       targetTriple = None,
       agbccAbi = false,
+      agbccCodegen = false,
+      agbccCodegenExports = Set.empty,
       gc = GC.default,
       lto = LTO.default,
       mode = Mode.default,
@@ -375,6 +389,8 @@ object NativeConfig {
       cppOptions: Seq[String],
       targetTriple: Option[String],
       agbccAbi: Boolean,
+      agbccCodegen: Boolean,
+      agbccCodegenExports: Set[String],
       gc: GC,
       lto: LTO,
       mode: Mode,
@@ -432,6 +448,22 @@ object NativeConfig {
 
     def withAgbccAbi(value: Boolean): NativeConfig =
       copy(agbccAbi = value)
+
+    def withAgbccCodegen(value: Boolean): NativeConfig =
+      copy(
+        agbccCodegen = value,
+        agbccAbi = agbccAbi || value,
+        useIncrementalCompilation =
+          if (value) false else useIncrementalCompilation
+      )
+
+    def withAgbccCodegenExports(value: Set[String]): NativeConfig =
+      copy(
+        agbccCodegenExports = value,
+        agbccCodegen = true,
+        agbccAbi = true,
+        useIncrementalCompilation = false
+      )
 
     def withBuildTarget(target: BuildTarget): NativeConfig =
       copy(buildTarget = target)
@@ -551,6 +583,9 @@ object NativeConfig {
           | - cppOptions:              ${showSeq(cppOptions)}
           | - targetTriple:            $targetTriple
           | - agbccAbi:                $agbccAbi
+          | - agbccCodegen:            $agbccCodegen
+          | - agbccCodegenExports:     ${agbccCodegenExports.toSeq.sorted
+           .mkString(", ")}
           | - GC:                      $gc
           | - LTO:                     $lto
           | - mode:                    $mode

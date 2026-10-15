@@ -71,65 +71,103 @@ private[scalanative] object LLVM {
   ): Future[Path] = Future {
     val inpath = srcPath.abs
     val outpath = objPath.abs
-    val isCpp = inpath.endsWith(cppExt)
-    val isLl = inpath.endsWith(llExt)
-    val workDir = config.workDir
+    if (inpath.endsWith(AgbccSourceExtension)) {
+      compileAgbcc(inpath, outpath, config.workDir.toFile)
+      objPath
+    } else {
+      val isCpp = inpath.endsWith(cppExt)
+      val isLl = inpath.endsWith(llExt)
+      val workDir = config.workDir
 
-    val compiler = if (isCpp) config.clangPP.abs else config.clang.abs
-    val langOptions = {
-      if (isLl) llvmIrFeatures
-      else if (isCpp) cppOptions(analysis)
-      else cOptions
-    }
-    val platformFlags = {
-      if (config.targetsMsys) msysExtras
-      else Nil
-    }
+      val compiler = if (isCpp) config.clangPP.abs else config.clang.abs
+      val langOptions = {
+        if (isLl) llvmIrFeatures
+        else if (isCpp) cppOptions(analysis)
+        else cOptions
+      }
+      val platformFlags = {
+        if (config.targetsMsys) msysExtras
+        else Nil
+      }
 
-    val agbccAbiFlags = AgbccAbi.compileFlags(
-      config.compilerConfig.targetTriple,
-      config.compilerConfig.agbccAbi
+      val agbccAbiFlags = AgbccAbi.compileFlags(
+        config.compilerConfig.targetTriple,
+        config.compilerConfig.agbccAbi
+      )
+
+      val configFlags = {
+        val multithreadingEnabled =
+          if (config.compilerConfig.multithreadingSupport)
+            Seq("-DSCALANATIVE_MULTITHREADING_ENABLED")
+          else Nil
+        val usingCppExceptions =
+          if (config.usingCppExceptions)
+            Seq("-DSCALANATIVE_USING_CPP_EXCEPTIONS")
+          else Nil
+        val allowTargetOverrrides =
+          config.compilerConfig.targetTriple.map(_ => s"-Wno-override-module")
+        multithreadingEnabled ++ usingCppExceptions ++ allowTargetOverrrides
+      }
+      // Always generate debug metadata on Windows, it's required for stack traces to work
+      val debugFlags =
+        if (config.targetsWindows) List("-g")
+        else if (config.compilerConfig.sourceLevelDebuggingConfig.enabled) {
+          // newer LLVM uses DWARFv5 by default on Linux. We support only DWARFv4 for now
+          List("-gdwarf-4")
+        } else Nil
+
+      val flags: Seq[String] =
+        buildTargetCompileOpts ++ flto ++ sanitizer ++ target ++
+          langOptions ++ platformFlags ++ debugFlags ++
+          configFlags ++ Seq("-fvisibility=hidden", opt) ++
+          Seq("-fomit-frame-pointer") ++ agbccAbiFlags ++
+          config.compileOptions
+      val compilec: Seq[String] =
+        Seq(compiler, "-c", inpath, "-o", outpath) ++ flags
+
+      // compile
+      config.logger.running(compilec)
+      val result = Process(compilec, workDir.toFile) !
+        Logger.toProcessLogger(config.logger)
+      if (result != 0) {
+        throw new BuildException(s"Failed to compile ${inpath}")
+      }
+
+      objPath
+    }
+  }
+
+  private final val AgbccSourceExtension = ".agbc.c"
+
+  private def compileAgbcc(srcPath: String, objPath: String, workDir: File)(
+      implicit config: Config
+  ): Unit = {
+    val agbcc = sys.env.getOrElse(
+      "AGBCC",
+      throw new BuildException(
+        "agbcc-generated NIR requires AGBCC to name the agbcc executable"
+      )
     )
+    val assembler = sys.env.getOrElse("ARM_AS", "arm-none-eabi-as")
+    val asmPath = objPath.stripSuffix(oExt) + ".s"
+    val compileCommand =
+      Seq(agbcc, "-mthumb-interwork", "-O2", "-fhex-asm", "-o", "-", "-")
+    config.logger.running(compileCommand)
+    val compileResult =
+      (Process(compileCommand, workDir) #< new File(srcPath) #> new File(
+        asmPath
+      )) !
+        Logger.toProcessLogger(config.logger)
+    if (compileResult != 0)
+      throw new BuildException(s"agbcc failed to compile ${srcPath}")
 
-    val configFlags = {
-      val multithreadingEnabled =
-        if (config.compilerConfig.multithreadingSupport)
-          Seq("-DSCALANATIVE_MULTITHREADING_ENABLED")
-        else Nil
-      val usingCppExceptions =
-        if (config.usingCppExceptions)
-          Seq("-DSCALANATIVE_USING_CPP_EXCEPTIONS")
-        else Nil
-      val allowTargetOverrrides =
-        config.compilerConfig.targetTriple.map(_ => s"-Wno-override-module")
-      multithreadingEnabled ++ usingCppExceptions ++ allowTargetOverrrides
-    }
-    // Always generate debug metadata on Windows, it's required for stack traces to work
-    val debugFlags =
-      if (config.targetsWindows) List("-g")
-      else if (config.compilerConfig.sourceLevelDebuggingConfig.enabled) {
-        // newer LLVM uses DWARFv5 by default on Linux. We support only DWARFv4 for now
-        List("-gdwarf-4")
-      } else Nil
-
-    val flags: Seq[String] =
-      buildTargetCompileOpts ++ flto ++ sanitizer ++ target ++
-        langOptions ++ platformFlags ++ debugFlags ++
-        configFlags ++ Seq("-fvisibility=hidden", opt) ++
-        Seq("-fomit-frame-pointer") ++ agbccAbiFlags ++
-        config.compileOptions
-    val compilec: Seq[String] =
-      Seq(compiler, "-c", inpath, "-o", outpath) ++ flags
-
-    // compile
-    config.logger.running(compilec)
-    val result = Process(compilec, workDir.toFile) !
+    val assembleCommand =
+      Seq(assembler, "-mcpu=arm7tdmi", "-o", objPath, asmPath)
+    config.logger.running(assembleCommand)
+    val assembleResult = Process(assembleCommand, workDir) !
       Logger.toProcessLogger(config.logger)
-    if (result != 0) {
-      throw new BuildException(s"Failed to compile ${inpath}")
-    }
-
-    objPath
+    if (assembleResult != 0)
+      throw new BuildException(s"ARM assembler failed to assemble ${asmPath}")
   }
 
   /** Links a collection of `.ll.o` files and the `.o` files from the

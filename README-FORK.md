@@ -1,12 +1,16 @@
-# scala-native-gba — an unofficial Scala Native fork for Game Boy Advance targets
+# scala-native-gba — Scala Native for Game Boy Advance development
 
 This is an **unofficial** fork of [Scala Native](https://github.com/scala-native/scala-native), maintained by
 scalamander-squad for compiling Scala 3 to ARMv4T/Thumb for the Game Boy Advance (the `immutableemerald` project).
 It is not affiliated with or endorsed by the Scala Native project, EPFL or the Scala Center.
 
+The project goal is to let GBA developers write ordinary, idiomatic Scala and compile it through Scala Native to
+freestanding ARM7TDMI code, while progressively matching agbcc's instruction selection and producing byte-identical
+game ROMs. Matching output is an active compiler objective, not a capability of the current LLVM-based default.
+
 - **Base:** upstream Scala Native `main` after v0.5.12 (version `0.5.13-SNAPSHOT`, the sbt 2 build), merged in
-  with its full history. The current toolchain is **`0.5.13-gba9`** (tag `v0.5.13-gba9`, based on upstream
-  `c25d3c520`).
+  with its full history. The current toolchain is **`0.5.13-gba9`** (tag `v0.5.13-gba9`, originally based on
+  upstream `c25d3c520`; later upstream main commits are merged on the fork branch).
 - **Branch `main`:** our commits on top of v0.5.12, with upstream merged in by merge commits. Each stage is tagged:
   `v0.5.12-gba1` … `v0.5.12-gba6` (on v0.5.12), then `v0.5.13-gba7` (the first upstream merge),
   `v0.5.13-gba8` (upstream catch-up; the scalafmt reformat in the "main branch and stage tags" commit is formatting
@@ -33,6 +37,25 @@ It is not affiliated with or endorsed by the Scala Native project, EPFL or the S
     match agbcc's instruction selection or register allocation, so it is a stepping stone for ABI-sensitive code and
     not a byte-identical code-generation mode. The profile is off by default; the GBA test ROM accepts
     `AGBCC_ABI=1` to exercise it.
+  - An experimental, separate `NativeConfig.withAgbccCodegen(true)` path is being developed to generate code from
+    lowered Scala Native NIR through the game's actual agbcc compiler. It is opt-in, GBA-target-only, and requires
+    `AGBCC` to point to agbcc; it also disables incremental compilation and LTO. The current emitter handles a
+    deliberately narrow NIR subset (scalar integer and pointer signatures, integer arithmetic/bitwise operations,
+    comparisons and conversions, direct calls, `sizeof`, and simple label/branch/switch control flow). Unsupported
+    operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
+    whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
+    symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
+    exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
+    signatures, arithmetic/bitwise operations, comparisons, shifts and conversions, direct calls, scalar external
+    global loads/stores, `sizeof`, and label/branch/switch control flow. A Scala 3 frontend test sends exported
+    `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
+    optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
+    oracle, as do additional integer arithmetic, 64-bit addition, and branch fixtures. These checks establish a
+    narrow real-NIR-to-agbcc path; object, aggregate and general runtime lowering, broader NIR coverage, and ROM-level
+    byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build
+    environments must set `AGBCC` and provide `ARM_AS` or `arm-none-eabi-as`. The parity test is
+    `toolsJVM3/Test/testOnly scala.scalanative.codegen.llvm.AgbccCodeGenTest` with `AGBCC`, `ARM_AS`,
+    `ARM_OBJCOPY`, and `ARM_READELF` configured.
 - **Merging upstream:** upstream is merged, never rebased: `git fetch origin main && git merge origin/main` (`origin` is the upstream repository; `squad` is this fork)
   on a branch, conflicts resolved so that upstream's change and our semantics both survive; cherry-picks of upstream
   commits we took early are dropped in favour of upstream's own version. The local version is

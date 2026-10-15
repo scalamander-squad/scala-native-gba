@@ -84,8 +84,8 @@ object CodeGen {
       // Partition into multiple LLVM IR files proportional to number
       // of available processors. This prevents LLVM from optimizing
       // across IR module boundary unless LTO is turned on.
-      def separate(): IRGenerators =
-        partitionBy(assembly, procs)(outputFileId).toSeq.map {
+      def separate(defnsToEmit: Seq[nir.Defn] = assembly): IRGenerators =
+        partitionBy(defnsToEmit, procs)(outputFileId).toSeq.map {
           case (id, defns) =>
             Future {
               val sorted = defns.sortBy(_.name)
@@ -145,15 +145,40 @@ object CodeGen {
         llvmIRGenerators
       }
 
-      val maybeBuildInfoGenerator = new Impl.BuildInfoCodegen(env)
-        .generateIfSupported(outputDir, config)
-        .map(Future.successful)
+      if (config.compilerConfig.agbccCodegen) {
+        AgbccCodeGen.validateConfig(config.compilerConfig)
+        val agbccDefinitions = AgbccCodeGen.selectExported(
+          assembly,
+          config.compilerConfig.agbccCodegenExports
+        )
+        val agbccNames: Set[nir.Global] = agbccDefinitions.map(_.name).toSet
+        val llvmDefinitions = assembly.filterNot(defn => agbccNames(defn.name))
+        val agbccGenerator =
+          if (agbccDefinitions.nonEmpty)
+            Seq(
+              Future.successful(
+                AgbccCodeGen.gen(agbccDefinitions, assembly, outputDir)
+              )
+            )
+          else Nil
+        val llvmGenerators =
+          if (llvmDefinitions.nonEmpty) separate(llvmDefinitions)
+          else Nil
+        val maybeBuildInfoGenerator = new Impl.BuildInfoCodegen(env)
+          .generateIfSupported(outputDir, config)
+          .map(Future.successful)
+        agbccGenerator ++ llvmGenerators ++ maybeBuildInfoGenerator
+      } else {
+        val maybeBuildInfoGenerator = new Impl.BuildInfoCodegen(env)
+          .generateIfSupported(outputDir, config)
+          .map(Future.successful)
 
-      val llvmIRGenerators =
-        if (config.compilerConfig.useIncrementalCompilation)
-          separateIncrementally()
-        else separate()
-      llvmIRGenerators ++ maybeBuildInfoGenerator
+        val llvmIRGenerators =
+          if (config.compilerConfig.useIncrementalCompilation)
+            separateIncrementally()
+          else separate()
+        llvmIRGenerators ++ maybeBuildInfoGenerator
+      }
     }
 
   private object Impl {
