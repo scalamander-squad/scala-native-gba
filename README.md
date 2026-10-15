@@ -9,6 +9,11 @@
 
 Scala Native is an optimizing ahead-of-time compiler and lightweight managed runtime designed specifically for Scala.
 
+> **Game Boy Advance fork:** This fork aims to support GBA development in idiomatic Scala and to add agbcc-compatible
+> instruction generation toward byte-identical ROMs. The agbcc path is experimental and currently covers only a
+> selected subset of lowered NIR; full-program support and byte-identical ROM output remain unverified. See the
+> [fork goals, current capabilities, and limitations](README-FORK.md).
+
 ## Documentation and Chat
 
 Getting Started and full documentation can be found at [https://www.scala-native.org/](https://www.scala-native.org/).
