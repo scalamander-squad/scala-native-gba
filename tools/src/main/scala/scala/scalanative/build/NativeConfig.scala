@@ -33,6 +33,9 @@ sealed trait NativeConfig {
    */
   def targetTriple: Option[String]
 
+  /** Use agbcc's four-byte APCS stack/call ABI for GBA Thumb targets. */
+  def agbccAbi: Boolean
+
   /** The garbage collector to use. */
   def gc: GC
 
@@ -317,6 +320,9 @@ sealed trait NativeConfig {
 
   /** Modify a semantics configuration */
   def withSemanticsConfig(update: Mapping[SemanticsConfig]): NativeConfig
+
+  /** Enable the opt-in APCS ABI used by the original GBA toolchain. */
+  def withAgbccAbi(value: Boolean): NativeConfig
 }
 
 object NativeConfig {
@@ -335,6 +341,7 @@ object NativeConfig {
       cOptions = Seq.empty,
       cppOptions = Seq.empty,
       targetTriple = None,
+      agbccAbi = false,
       gc = GC.default,
       lto = LTO.default,
       mode = Mode.default,
@@ -367,6 +374,7 @@ object NativeConfig {
       cOptions: Seq[String],
       cppOptions: Seq[String],
       targetTriple: Option[String],
+      agbccAbi: Boolean,
       gc: GC,
       lto: LTO,
       mode: Mode,
@@ -421,6 +429,9 @@ object NativeConfig {
     def withTargetTriple(value: String): NativeConfig = {
       withTargetTriple(Some(value))
     }
+
+    def withAgbccAbi(value: Boolean): NativeConfig =
+      copy(agbccAbi = value)
 
     def withBuildTarget(target: BuildTarget): NativeConfig =
       copy(buildTarget = target)
@@ -539,6 +550,7 @@ object NativeConfig {
           | - cOptions:                ${showSeq(cOptions)}
           | - cppOptions:              ${showSeq(cppOptions)}
           | - targetTriple:            $targetTriple
+          | - agbccAbi:                $agbccAbi
           | - GC:                      $gc
           | - LTO:                     $lto
           | - mode:                    $mode

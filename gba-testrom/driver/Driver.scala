@@ -3,7 +3,7 @@
 // (no main; ScalaNativeInit + @exported symbols). The C runtime compile/link of the tools is not used: build.sh
 // compiles the generated .ll files itself, so the driver's own clang step may fail and that is ignored.
 // args: outDir classpathFile   Env: ROMDATA=1|0, ROMDATA_OPTS=k=v,... (scalanative.romdata.<k>), DRIVER_PROPS=k=v,...,
-//      CLANG_PATH / CLANGPP_PATH (default /usr/bin/clang, clang++)
+//      AGBCC_ABI=1 for APCS stack/call ABI, CLANG_PATH / CLANGPP_PATH (default /usr/bin/clang, clang++)
 import scala.scalanative.build.*
 import java.nio.file.{Files, Paths}
 import scala.concurrent.Await
@@ -28,6 +28,7 @@ object Driver:
       .withClang(Paths.get(sys.env.getOrElse("CLANG_PATH", "/usr/bin/clang")))
       .withClangPP(Paths.get(sys.env.getOrElse("CLANGPP_PATH", "/usr/bin/clang++")))
       .withTargetTriple("armv4t-none-eabi")
+      .withAgbccAbi(sys.env.get("AGBCC_ABI").exists(v => v == "1" || v == "true"))
       .withBuildTarget(BuildTarget.libraryStatic)
       .withGC(GC.none).withMode(Mode.releaseFull).withLTO(LTO.none)
       .withMultithreading(false).withCheck(false).withLinkStubs(true).withEmbedResources(false)

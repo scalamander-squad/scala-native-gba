@@ -4,6 +4,7 @@
 # Needs: cs (coursier), a JDK, clang with the ARM target, arm-none-eabi-{gcc,ld,objcopy,nm} with newlib-nano.
 # Env: NATIVE_VERSION  fork version (default <baseVersion>-<localForkTag> from ../project/ScalaNativeBuildInfo.scala)
 #      ROMDATA=1|0     link-time module evaluation (default 1; 0 disables the fork's romdata pass -> romdata checks FAIL)
+#      AGBCC_ABI=1     opt into APCS four-byte stack/call ABI (not instruction-selection matching)
 #      DRIVER_PROPS    extra tools system properties, e.g. scalanative.interflow.inlineUnderTry=false
 #      ARM_PREFIX      binutils/gcc prefix (default arm-none-eabi-)   CLANG (default clang)   OUT (default out)
 set -euo pipefail
@@ -13,6 +14,10 @@ V=${NATIVE_VERSION:-$(sed -n 's/.*baseVersion = "\(.*\)".*/\1/p' $BI)-$(sed -n '
 S3=3.9.0; OUT=${OUT:-out}; P=${ARM_PREFIX:-arm-none-eabi-}; CLANG=${CLANG:-clang}
 export ROMDATA=${ROMDATA:-1} ROMDATA_OPTS=${ROMDATA_OPTS-strict=gbatest\\.Rom.*}
 ARMFL="-mthumb -march=armv4t -mfloat-abi=soft"
+AGBCC_FLAGS=""
+if [[ ${AGBCC_ABI:-0} == 1 || ${AGBCC_ABI:-0} == true ]]; then
+  AGBCC_FLAGS="-mabi=apcs-gnu"
+fi
 mkdir -p "$OUT"; rm -rf "$OUT/classes" "$OUT/driver-classes" "$OUT/sn" "$OUT/obj"
 cpof() { cs fetch -q --classpath "$@" | tr ':' '\n' | grep -v -- '-sources\.jar$' | paste -sd: -; }
 
@@ -36,7 +41,7 @@ if grep -q "not ROM-resident" "$OUT/driver.log"; then grep -A10 "not ROM-residen
 
 echo "== clang IR -> Thumb objects; runtime"
 mkdir -p "$OUT/obj"
-ls "$OUT"/sn/native/generated/*.ll | xargs -P "$(nproc)" -I{} sh -c "$CLANG"' -target armv4t-none-eabi '"$ARMFL"' -Oz -fomit-frame-pointer -fvisibility=hidden -funwind-tables -fdata-sections -ffunction-sections -Wno-override-module -c "{}" -o "'"$OUT"'/obj/$(basename "{}" .ll).o"'
+ls "$OUT"/sn/native/generated/*.ll | xargs -P "$(nproc)" -I{} sh -c "$CLANG"' -target armv4t-none-eabi '"$ARMFL"' '"$AGBCC_FLAGS"' -Oz -fomit-frame-pointer -fvisibility=hidden -funwind-tables -fdata-sections -ffunction-sections -Wno-override-module -c "{}" -o "'"$OUT"'/obj/$(basename "{}" .ll).o"'
 ${P}gcc $ARMFL -c rt/crt0.s -o "$OUT/obj/crt0.o"
 ${P}gcc $ARMFL -Os -funwind-tables -ffunction-sections -Wall -Wno-unused-parameter -c rt/rt.c -o "$OUT/obj/rt.o"
 ${P}gcc $ARMFL -Os -funwind-tables -c rt/eh-ehabi.c -o "$OUT/obj/eh.o"

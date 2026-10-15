@@ -86,6 +86,11 @@ private[scalanative] object LLVM {
       else Nil
     }
 
+    val agbccAbiFlags = AgbccAbi.compileFlags(
+      config.compilerConfig.targetTriple,
+      config.compilerConfig.agbccAbi
+    )
+
     val configFlags = {
       val multithreadingEnabled =
         if (config.compilerConfig.multithreadingSupport)
@@ -111,7 +116,7 @@ private[scalanative] object LLVM {
       buildTargetCompileOpts ++ flto ++ sanitizer ++ target ++
         langOptions ++ platformFlags ++ debugFlags ++
         configFlags ++ Seq("-fvisibility=hidden", opt) ++
-        Seq("-fomit-frame-pointer") ++
+        Seq("-fomit-frame-pointer") ++ agbccAbiFlags ++
         config.compileOptions
     val compilec: Seq[String] =
       Seq(compiler, "-c", inpath, "-o", outpath) ++ flags

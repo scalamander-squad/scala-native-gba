@@ -5,9 +5,13 @@ scalamander-squad for compiling Scala 3 to ARMv4T/Thumb for the Game Boy Advance
 It is not affiliated with or endorsed by the Scala Native project, EPFL or the Scala Center.
 
 - **Base:** upstream Scala Native `main` after v0.5.12 (version `0.5.13-SNAPSHOT`, the sbt 2 build), merged in
-  with its full history. The current toolchain is **`0.5.13-gba8`** (tag `v0.5.13-gba8`).
+  with its full history. The current toolchain is **`0.5.13-gba9`** (tag `v0.5.13-gba9`, based on upstream
+  `c25d3c520`).
 - **Branch `main`:** our commits on top of v0.5.12, with upstream merged in by merge commits. Each stage is tagged:
-  `v0.5.12-gba1` … `v0.5.12-gba6` (on v0.5.12), then `v0.5.13-gba7` (the first upstream merge), `v0.5.13-gba8` (upstream catch-up; the scalafmt reformat in the "main branch and stage tags" commit is formatting only); `v0.5.12-romdata2`
+  `v0.5.12-gba1` … `v0.5.12-gba6` (on v0.5.12), then `v0.5.13-gba7` (the first upstream merge),
+  `v0.5.13-gba8` (upstream catch-up; the scalafmt reformat in the "main branch and stage tags" commit is formatting
+  only), and `v0.5.13-gba9` (the next upstream sync plus the GBA headless test ROM and its weekly merge workflow);
+  `v0.5.12-romdata2`
   and `v0.5.12-gba4opt` mark the original development lines of the ROM-data pass and the optimiser patches, which
   were later applied onto `main`.
 - **What the patches do** (each commit describes one change):
@@ -23,6 +27,12 @@ It is not affiliated with or endorsed by the Scala Native project, EPFL or the S
   - Single-threaded / freestanding guards (needed since upstream's threading rework): the exported thread start routine
     runs threads only when multithreading is enabled, single-threaded builds allocate no pthread state, and
     freestanding targets skip the C `ThreadInfo` writes at start-up and shutdown. Multithreaded builds are unchanged.
+  - An opt-in `NativeConfig.withAgbccAbi(true)` compile profile for `armv4t-none-eabi`/`thumbv4t-none-eabi` adds
+    `-mabi=apcs-gnu`. It is rejected for other targets. This selects APCS-GNU call, stack and aggregate lowering;
+    for the tested non-leaf probe, it changes Clang's eight-byte frame to agbcc's four-byte frame. It does **not**
+    match agbcc's instruction selection or register allocation, so it is a stepping stone for ABI-sensitive code and
+    not a byte-identical code-generation mode. The profile is off by default; the GBA test ROM accepts
+    `AGBCC_ABI=1` to exercise it.
 - **Merging upstream:** upstream is merged, never rebased: `git fetch origin main && git merge origin/main` (`origin` is the upstream repository; `squad` is this fork)
   on a branch, conflicts resolved so that upstream's change and our semantics both survive; cherry-picks of upstream
   commits we took early are dropped in favour of upstream's own version. The local version is
@@ -53,5 +63,10 @@ It is not affiliated with or endorsed by the Scala Native project, EPFL or the S
   disables the ROM-data pass and must make the romdata checks fail. The upstream-sync workflow runs it on every clean
   merge and puts the verdict in the PR. ROMs are never published: `gba-testrom/out/`, `*.gba` and `*.elf` are ignored,
   and CI uploads no artifacts.
+  `gba-testrom/abi/check-agbcc-abi.sh` is a separate mixed-compiler ROM check; it needs the game agbcc binary in
+  `AGBCC` and verifies calls in both directions across six fixed arguments, a 64-bit value, a by-value struct,
+  varargs and a struct return. Its linker suppresses EABI attribute mismatch diagnostics because agbcc and Clang
+  label their object files EABI0 and EABI5 respectively; the test exercises runtime calling behavior rather than
+  claiming those metadata labels agree.
 - **Licence:** Apache-2.0, as upstream (see `LICENSE.md`); our changes are offered under the same licence.
 - Fixes that are generally useful are intended to be proposed upstream following the project's contribution rules.
