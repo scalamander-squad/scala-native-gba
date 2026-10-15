@@ -16,6 +16,59 @@ import org.scalanative.testsuite.utils.AssertThrows.assertThrows
 import org.scalanative.testsuite.utils.Platform.is32BitPlatform
 
 class FloatTest {
+  private def assertDoubleConstructorBits(
+      expected: Int,
+      value: scala.Double
+  ): Unit =
+    assertEquals(
+      expected,
+      JFloat.floatToRawIntBits(new JFloat(value).floatValue())
+    )
+
+  @Test def doubleConstructorExactlyRepresentableValues(): Unit = {
+    assertDoubleConstructorBits(0x3fc00000, 1.5)
+    assertDoubleConstructorBits(0xc0200000, -2.5)
+    assertDoubleConstructorBits(0x7f7fffff, JFloat.MAX_VALUE.toDouble)
+    assertDoubleConstructorBits(0x00800000, JFloat.MIN_NORMAL.toDouble)
+  }
+
+  @Test def doubleConstructorHalfwayValuesRoundToEven(): Unit = {
+    val halfUlp = Math.pow(2.0, -24)
+    assertDoubleConstructorBits(0x3f800000, 1.0 + halfUlp)
+    assertDoubleConstructorBits(0x3f800001, 1.0 + halfUlp + Math.pow(2.0, -52))
+    assertDoubleConstructorBits(0x3f800002, 1.0 + 3.0 * halfUlp)
+    assertDoubleConstructorBits(0xbf800000, -1.0 - halfUlp)
+  }
+
+  @Test def doubleConstructorSignedZerosArePreserved(): Unit = {
+    assertDoubleConstructorBits(0x00000000, 0.0)
+    assertDoubleConstructorBits(0x80000000, -0.0)
+  }
+
+  @Test def doubleConstructorSubnormalValuesAndUnderflow(): Unit = {
+    assertDoubleConstructorBits(0x00000001, JFloat.MIN_VALUE.toDouble)
+    assertDoubleConstructorBits(0x80000001, -JFloat.MIN_VALUE.toDouble)
+    assertDoubleConstructorBits(0x00000000, Math.pow(2.0, -150))
+    assertDoubleConstructorBits(
+      0x00000001,
+      Math.pow(2.0, -150) + Math.pow(2.0, -173)
+    )
+    assertDoubleConstructorBits(0x00000002, 3.0 * Math.pow(2.0, -150))
+    assertDoubleConstructorBits(0x00000000, scala.Double.MinPositiveValue)
+    assertDoubleConstructorBits(0x80000000, -scala.Double.MinPositiveValue)
+  }
+
+  @Test def doubleConstructorFiniteOverflowProducesInfinity(): Unit = {
+    assertDoubleConstructorBits(0x7f800000, scala.Double.MaxValue)
+    assertDoubleConstructorBits(0xff800000, -scala.Double.MaxValue)
+  }
+
+  @Test def doubleConstructorNonFiniteValues(): Unit = {
+    assertDoubleConstructorBits(0x7f800000, scala.Double.PositiveInfinity)
+    assertDoubleConstructorBits(0xff800000, scala.Double.NegativeInfinity)
+    assertTrue(new JFloat(scala.Double.NaN).isNaN())
+  }
+
   @Test def testEquals(): Unit = {
     val pzero = +0.0f
     val nzero = -0.0f
@@ -395,6 +448,55 @@ class FloatTest {
       scala.Float.PositiveInfinity,
       -scala.Float.NegativeInfinity,
       delta
+    )
+  }
+
+  // Issue 3982
+  @Test def IEEE_NegativeZeroInDeprecatedConstructor(): Unit = {
+    /* Direct constructor Float(d) was deprecated in Java 9 but
+     * should be correct until it is eventually deleted by Java.
+     *
+     * Tangentially tests: divideByNegativeZeroIsNegativeInfinity()
+     */
+
+    val negZeroByValueOf = Float.valueOf(-0.0f)
+    assertTrue(
+      "Expected negZero by valueOf to be jl.Float.NEGATIVE_INFINITY",
+      1.0 / negZeroByValueOf == Float.NEGATIVE_INFINITY
+    )
+
+    val negZeroByConstructor_1 = new Float(Float.valueOf(-0.0f))
+    assertTrue(
+      "Expected negZero by constructor_1 to be jl.Float.NEGATIVE_INFINITY",
+      1.0 / negZeroByConstructor_1 == Float.NEGATIVE_INFINITY
+    )
+
+    val negZeroByConstructor_2 = new Float(-0.0f)
+    assertTrue(
+      "Expected negZero by constructor_2 to be jl.Double.NEGATIVE_INFINITY",
+      1.0 / negZeroByConstructor_2 == Float.NEGATIVE_INFINITY
+    )
+  }
+
+  // Check that proper negative zeros are created, even in Release-fast mode.
+
+  val negZeroF = Float.valueOf(-0.0f)
+  val posZeroF = Float.valueOf(+0.0f)
+
+  // Issue 3986, part 1 of 2
+  @Test def validateIEEE754ClassLevelNegativeZeros(): Unit = {
+    assertTrue(
+      s"Expected a jl.Float with value negative zero",
+      (1.0f / negZeroF) == Float.NEGATIVE_INFINITY
+    )
+  }
+
+  // Issue 3986, part 2 of 2
+  @Test def validateIEEE754LocalNegativeZero(): Unit = {
+    val localNegZeroF = Float.valueOf(-0.0f)
+    assertTrue(
+      s"Expected a local jl.Float with value negative zero",
+      (1.0f / localNegZeroF) == Float.NEGATIVE_INFINITY
     )
   }
 }

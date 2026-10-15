@@ -60,6 +60,9 @@ object System {
 
   def getProperties(): ju.Properties = SystemProperties.getProperties()
 
+  def setProperties(props: ju.Properties): Unit =
+    SystemProperties.setProperties(props)
+
   def clearProperty(key: String): String =
     SystemProperties.remove(key).asInstanceOf[String]
 
@@ -301,99 +304,130 @@ private[java] object SystemProperties {
   import System.{getenv, lineSeparator}
   import Freestanding.isFreestanding
 
-  // Freestanding: no table until the first setProperty; getProperty(key) is then null / the default.
-  private val systemProperties0: ju.Properties =
-    if (isFreestanding) null else loadProperties()
-  private var systemPropertiesVar: ju.Properties =
-    if (isFreestanding) null
-    else {
-      Platform.setOSProps { (key: CString, value: CString) =>
-        systemProperties0.setProperty(fromCString(key), fromCString(value))
-        ()
+  final val CurrentDirectoryKey = "user.dir"
+  private final val UserHomeDirectoryKey = "user.home"
+  private final val UserCountryKey = "user.country"
+  private final val UserLanguageKey = "user.language"
+  private final val UserNameKey = "user.name"
+
+  private class PropertyState(
+      val properties: ju.Properties,
+      initializeDefaults: Boolean
+  ) {
+    private def initializeProperty(name: String, value: Option[String]): Unit =
+      value.foreach(properties.setProperty(name, _))
+
+    private lazy val initializeCurrentDirectory =
+      initializeProperty(CurrentDirectoryKey, getCurrentDirectory())
+    private lazy val initializeUserHomeDirectory =
+      initializeProperty(UserHomeDirectoryKey, getUserHomeDirectory())
+    private lazy val initializeUserCountry =
+      initializeProperty(UserCountryKey, getUserCountry())
+    private lazy val initializeUserLanguage =
+      initializeProperty(UserLanguageKey, getUserLanguage())
+    private lazy val initializeUserName =
+      initializeProperty(UserNameKey, getUserName())
+
+    def getProperties(): ju.Properties = {
+      if (initializeDefaults) {
+        initializeCurrentDirectory
+        initializeUserHomeDirectory
+        initializeUserCountry
+        initializeUserLanguage
+        initializeUserName
       }
-      systemProperties0
+      properties
     }
-  private def systemProperties: ju.Properties = {
-    if (systemPropertiesVar == null) systemPropertiesVar = new ju.Properties()
-    systemPropertiesVar
+
+    def maybeInitializeProperty(name: String): Unit = {
+      if (initializeDefaults) name match {
+        case `CurrentDirectoryKey`  => initializeCurrentDirectory
+        case `UserHomeDirectoryKey` => initializeUserHomeDirectory
+        case `UserCountryKey`       => initializeUserCountry
+        case `UserLanguageKey`      => initializeUserLanguage
+        case `UserNameKey`          => initializeUserName
+        case _                      =>
+      }
+    }
   }
 
-  final val CurrentDirectoryKey = "user.dir"
-  private lazy val initializeCurrentDirectory =
-    getCurrentDirectory().foreach(
-      systemProperties.setProperty(CurrentDirectoryKey, _)
-    )
+  private val osProperties = if (isFreestanding) null else new ju.Properties()
+  if (!isFreestanding) {
+    Platform.setOSProps { (key: CString, value: CString) =>
+      osProperties.setProperty(fromCString(key), fromCString(value))
+      ()
+    }
+  }
 
-  private final val UserHomeDirectoryKey = "user.home"
-  private lazy val initializeUserHomeDirectory =
-    getUserHomeDirectory().foreach(
-      systemProperties.setProperty(UserHomeDirectoryKey, _)
-    )
+  private def defaultState(): PropertyState =
+    new PropertyState(loadDefaultProperties(), initializeDefaults = true)
 
-  private final val UserCountryKey = "user.country"
-  private lazy val initializeUserCountry =
-    getUserCountry().foreach(systemProperties.setProperty(UserCountryKey, _))
+  // Freestanding targets have no OS properties. Keep their empty property map
+  // lazy so getProperty without a prior write does not allocate it.
+  @volatile private var currentState: PropertyState =
+    if (isFreestanding) null else defaultState()
 
-  private final val UserLanguageKey = "user.language"
-  private lazy val initializeUserLanguage =
-    getUserLanguage().foreach(systemProperties.setProperty(UserLanguageKey, _))
-
-  private final val UserNameKey = "user.name"
-  private lazy val initializeUserName =
-    getUserName().foreach(systemProperties.setProperty(UserNameKey, _))
+  private def ensureFreestandingState(): PropertyState = {
+    var state = currentState
+    if (state == null) {
+      state = new PropertyState(new ju.Properties(), initializeDefaults = false)
+      currentState = state
+    }
+    state
+  }
 
   def getProperties(): ju.Properties = {
-    if (!isFreestanding) {
-      // initialize all properties
-      initializeCurrentDirectory
-      initializeUserHomeDirectory
-      initializeUserCountry
-      initializeUserLanguage
-      initializeUserName
-    }
-    systemProperties
+    val state =
+      if (isFreestanding) ensureFreestandingState()
+      else currentState
+    state.getProperties()
   }
 
-  @inline private def maybeInititializeProperty(name: String) =
-    if (!isFreestanding) name match {
-      case `CurrentDirectoryKey`  => initializeCurrentDirectory
-      case `UserHomeDirectoryKey` => initializeUserHomeDirectory
-      case `UserCountryKey`       => initializeUserCountry
-      case `UserLanguageKey`      => initializeUserLanguage
-      case `UserNameKey`          => initializeUserName
-      case _                      =>
+  def setProperties(properties: ju.Properties): Unit = {
+    currentState =
+      if (properties != null) new PropertyState(properties, false)
+      else if (isFreestanding) null
+      else defaultState()
+  }
+
+  private def propertiesFor(name: String): ju.Properties = {
+    val state = currentState
+    if (state == null) {
+      if (isFreestanding) null
+      else {
+        val default = defaultState()
+        currentState = default
+        default.maybeInitializeProperty(name)
+        default.properties
+      }
+    } else {
+      state.maybeInitializeProperty(name)
+      state.properties
     }
+  }
 
   def getProperty(name: String): String = {
-    maybeInititializeProperty(name)
-    if (isFreestanding) {
-      if (systemPropertiesVar == null) null
-      else systemPropertiesVar.getProperty(name)
-    } else systemProperties.getProperty(name)
+    val properties = propertiesFor(name)
+    if (properties == null) null else properties.getProperty(name)
   }
 
   def getProperty(name: String, default: String): String = {
-    maybeInititializeProperty(name)
-    if (isFreestanding) {
-      if (systemPropertiesVar == null) default
-      else systemPropertiesVar.getProperty(name, default)
-    } else systemProperties.getProperty(name, default)
+    val properties = propertiesFor(name)
+    if (properties == null) default else properties.getProperty(name, default)
   }
 
-  def setProperty(name: String, value: String) = {
-    maybeInititializeProperty(name)
-    systemProperties.setProperty(name, value)
+  def setProperty(name: String, value: String): Object = {
+    val state = ensureFreestandingState()
+    state.maybeInitializeProperty(name)
+    state.properties.setProperty(name, value)
   }
 
   def remove(name: String): Object = {
-    maybeInititializeProperty(name)
-    if (isFreestanding) {
-      if (systemPropertiesVar == null) null
-      else systemPropertiesVar.remove(name)
-    } else systemProperties.remove(name)
+    val properties = propertiesFor(name)
+    if (properties == null) null else properties.remove(name)
   }
 
-  private def loadProperties() = {
+  private def loadDefaultProperties(): ju.Properties = {
     val sysProps = new ju.Properties()
     sysProps.setProperty("java.version", "1.8")
     sysProps.setProperty("java.vm.specification.version", "1.8")
@@ -424,7 +458,6 @@ private[java] object SystemProperties {
     } else {
       sysProps.setProperty("file.separator", "/")
       sysProps.setProperty("path.separator", ":")
-      // MacOS uses TMPDIR to specify tmp directory, other formats are also used in the Unix system
       def env(name: String): Option[String] = Option(getenv(name))
       val tmpDirectory = env("TMPDIR")
         .orElse(env("TEMPDIR"))
@@ -434,8 +467,10 @@ private[java] object SystemProperties {
       sysProps.setProperty("java.io.tmpdir", tmpDirectory)
     }
 
+    if (osProperties != null) sysProps.putAll(osProperties)
     sysProps
   }
+
   private def getCurrentDirectory(): Option[String] = {
     val bufSize = 1024.toUInt
     if (isWindows) {
