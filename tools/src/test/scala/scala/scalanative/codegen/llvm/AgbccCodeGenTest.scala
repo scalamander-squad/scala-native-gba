@@ -3,18 +3,20 @@ package scala.scalanative.codegen.llvm
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-import scala.sys.process._
-import scala.concurrent.{Await, Future}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
+import scala.concurrent.{Await, Future}
+import scala.sys.process._
 
 import org.junit.Assert._
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-import scala.scalanative.nir
-import scala.scalanative.build.{BuildException, Config, GC, Logger, Mode, NativeConfig, ScalaNative}
+import scala.scalanative.build.{
+  BuildException, Config, GC, Logger, Mode, NativeConfig, ScalaNative
+}
 import scala.scalanative.buildinfo.ScalaNativeBuildInfo
+import scala.scalanative.nir
 import scala.scalanative.util.Scope
 
 class AgbccCodeGenTest {
@@ -115,14 +117,22 @@ class AgbccCodeGenTest {
     assertTrue(source.contains("agbc_match_div(sn_i32 sn_l21, sn_i32 sn_l22)"))
     assertTrue(source.contains("agbc_match_udiv(sn_i32 sn_l31, sn_i32 sn_l32)"))
     assertTrue(source.contains("agb_match_leaf(sn_l11)"))
-    assertTrue(source.contains("sn_l3 = ((sn_i32)((sn_u32)(sn_l1) + (sn_u32)(sn_l2)))"))
-    assertTrue(source.contains("sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22))"))
+    assertTrue(
+      source.contains("sn_l3 = ((sn_i32)((sn_u32)(sn_l1) + (sn_u32)(sn_l2)))")
+    )
+    assertTrue(
+      source.contains("sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22))")
+    )
   }
 
-  @Test def integerDivisionAndRemainderAreEmittedAndDefaultConfigStaysLlvm(): Unit = {
+  @Test def integerDivisionAndRemainderAreEmittedAndDefaultConfigStaysLlvm()
+      : Unit = {
     val base = NativeConfig.empty
     assertFalse("agbcc backend must remain opt-in", base.agbccCodegen)
-    assertTrue("default export filter must be empty", base.agbccCodegenExports.isEmpty)
+    assertTrue(
+      "default export filter must be empty",
+      base.agbccCodegenExports.isEmpty
+    )
 
     val optIn = base.withAgbccCodegenExports(Set("only_this_export"))
     assertTrue(optIn.agbccCodegen)
@@ -148,12 +158,14 @@ class AgbccCodeGenTest {
           nir.Inst.Ret(nir.Val.Local(nir.Local(3), i32))
         )
       )
-    val source = AgbccCodeGen.emit(Seq(
-      binary("agbc_sdiv", nir.Bin.Sdiv),
-      binary("agbc_udiv", nir.Bin.Udiv),
-      binary("agbc_srem", nir.Bin.Srem),
-      binary("agbc_urem", nir.Bin.Urem)
-    ))
+    val source = AgbccCodeGen.emit(
+      Seq(
+        binary("agbc_sdiv", nir.Bin.Sdiv),
+        binary("agbc_udiv", nir.Bin.Udiv),
+        binary("agbc_srem", nir.Bin.Srem),
+        binary("agbc_urem", nir.Bin.Urem)
+      )
+    )
     assertTrue(source, source.contains("((sn_i32)(sn_l1) / (sn_i32)(sn_l2))"))
     assertTrue(source, source.contains("((sn_u32)(sn_l1) / (sn_u32)(sn_l2))"))
     assertTrue(source, source.contains("((sn_i32)(sn_l1) % (sn_i32)(sn_l2))"))
@@ -195,16 +207,24 @@ class AgbccCodeGenTest {
       fail("agbcc code generation must reject non-GBA targets")
     } catch {
       case error: BuildException =>
-        assertTrue(error.getMessage, error.getMessage.contains("armv4t-none-eabi"))
+        assertTrue(
+          error.getMessage,
+          error.getMessage.contains("armv4t-none-eabi")
+        )
     }
   }
 
   @Test def generatedFunctionsMatchIndependentAgbccOracleObject(): Unit = {
     val agbcc = sys.env.get("AGBCC")
     val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
-    val objcopy = sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
-    val readelf = sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
-    assumeTrue("set AGBCC and install the ARM binutils to run object parity", agbcc.isDefined)
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and install the ARM binutils to run object parity",
+      agbcc.isDefined
+    )
 
     val dir = Files.createTempDirectory("sn-agbcc-codegen-test")
     val generated = AgbccCodeGen.emit(fixture)
@@ -273,11 +293,17 @@ class AgbccCodeGenTest {
         |}
         |""".stripMargin
 
-    val generatedObject = compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
     val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
-    val generatedText = extractSection(objcopy.get, generatedObject, "generated.text")
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
-    assertArrayEquals(".text bytes differ", Files.readAllBytes(oracleText), Files.readAllBytes(generatedText))
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
 
     val generatedRelocs = relocationRows(readelf.get, generatedObject)
     val oracleRelocs = relocationRows(readelf.get, oracleObject)
@@ -286,42 +312,44 @@ class AgbccCodeGenTest {
 
   @Test def exportedScalaIntegerFunctionFlowsThroughLoweringToAgbcc(): Unit = {
     val out = Files.createTempDirectory("sn-agbcc-scala-export")
-    val nirFiles = scala.scalanative.NIRCompiler.getCompiler(out).compile(
-      """
-        |object AgbccScalaExportFixture {
-        |  @scala.scalanative.unsafe.exported("agbc_scala_add")
-        |  def add(a: Int, b: Int): Int = a + b
-        |  @scala.scalanative.unsafe.exported("agbc_scala_max")
-        |  def max(a: Int, b: Int): Int = if a >= b then a else b
-        |  @scala.scalanative.unsafe.exported("agbc_scala_longadd")
-        |  def longAdd(a: Long, b: Long): Long = a + b
-        |  @scala.scalanative.unsafe.exported("agbc_scala_muladd")
-        |  def mulAdd(a: Int, b: Int, c: Int): Int = a * b + c
-        |}
-        |@scala.scalanative.unsafe.extern
-        |object AgbccRngState {
-        |  @scala.scalanative.unsafe.name("gRngValue")
-        |  var value: Int = scala.scalanative.unsafe.extern
-        |  @scala.scalanative.unsafe.name("xlat_random_sRandCount")
-        |  var count: Int = scala.scalanative.unsafe.extern
-        |  @scala.scalanative.unsafe.name("xlat_random_sUnknown")
-        |  var unknown: Byte = scala.scalanative.unsafe.extern
-        |}
-        |object AgbccRandomFixture {
-        |  @scala.scalanative.unsafe.exported("Random")
-        |  def random(): Int = {
-        |    AgbccRngState.value = AgbccRngState.value * 1103515245 + 24691
-        |    AgbccRngState.count += 1
-        |    AgbccRngState.value >>> 16
-        |  }
-        |  @scala.scalanative.unsafe.exported("SeedRng")
-        |  def seed(seed: Int): Unit = {
-        |    AgbccRngState.value = seed & 0xFFFF
-        |    AgbccRngState.unknown = 0
-        |  }
-        |}
-        |""".stripMargin
-    )
+    val nirFiles = scala.scalanative.NIRCompiler
+      .getCompiler(out)
+      .compile(
+        """
+          |object AgbccScalaExportFixture {
+          |  @scala.scalanative.unsafe.exported("agbc_scala_add")
+          |  def add(a: Int, b: Int): Int = a + b
+          |  @scala.scalanative.unsafe.exported("agbc_scala_max")
+          |  def max(a: Int, b: Int): Int = if a >= b then a else b
+          |  @scala.scalanative.unsafe.exported("agbc_scala_longadd")
+          |  def longAdd(a: Long, b: Long): Long = a + b
+          |  @scala.scalanative.unsafe.exported("agbc_scala_muladd")
+          |  def mulAdd(a: Int, b: Int, c: Int): Int = a * b + c
+          |}
+          |@scala.scalanative.unsafe.extern
+          |object AgbccRngState {
+          |  @scala.scalanative.unsafe.name("gRngValue")
+          |  var value: Int = scala.scalanative.unsafe.extern
+          |  @scala.scalanative.unsafe.name("xlat_random_sRandCount")
+          |  var count: Int = scala.scalanative.unsafe.extern
+          |  @scala.scalanative.unsafe.name("xlat_random_sUnknown")
+          |  var unknown: Byte = scala.scalanative.unsafe.extern
+          |}
+          |object AgbccRandomFixture {
+          |  @scala.scalanative.unsafe.exported("Random")
+          |  def random(): Int = {
+          |    AgbccRngState.value = AgbccRngState.value * 1103515245 + 24691
+          |    AgbccRngState.count += 1
+          |    AgbccRngState.value >>> 16
+          |  }
+          |  @scala.scalanative.unsafe.exported("SeedRng")
+          |  def seed(seed: Int): Unit = {
+          |    AgbccRngState.value = seed & 0xFFFF
+          |    AgbccRngState.unknown = 0
+          |  }
+          |}
+          |""".stripMargin
+      )
     assertTrue("Scala compiler did not produce NIR", nirFiles.nonEmpty)
 
     val runtime = ScalaNativeBuildInfo.nativeRuntimeClasspath
@@ -354,13 +382,24 @@ class AgbccCodeGenTest {
       .withLogger(Logger.nullLogger)
 
     implicit val scope: Scope = Scope.unsafe()
-    val linked = Await.result(ScalaNative.link(config, ScalaNative.entries(config)), 2.minutes)
-    val optimized = Await.result(ScalaNative.optimize(config, linked), 2.minutes)
-    val generated = Await.result(ScalaNative.codegen(config, optimized), 2.minutes)
+    val linked = Await.result(
+      ScalaNative.link(config, ScalaNative.entries(config)),
+      2.minutes
+    )
+    val optimized =
+      Await.result(ScalaNative.optimize(config, linked), 2.minutes)
+    val generated =
+      Await.result(ScalaNative.codegen(config, optimized), 2.minutes)
     val paths = Await.result(Future.sequence(generated), 2.minutes)
-    val cSources = paths.filter(_.toString.endsWith(AgbccCodeGen.SourceExtension))
-    assertEquals("expected Scala exports to enter the agbcc backend", 1, cSources.size)
-    val source = new String(Files.readAllBytes(cSources.head), StandardCharsets.UTF_8)
+    val cSources =
+      paths.filter(_.toString.endsWith(AgbccCodeGen.SourceExtension))
+    assertEquals(
+      "expected Scala exports to enter the agbcc backend",
+      1,
+      cSources.size
+    )
+    val source =
+      new String(Files.readAllBytes(cSources.head), StandardCharsets.UTF_8)
     assertTrue(source, source.contains("agbc_scala_add"))
     assertTrue(source, source.contains("agbc_scala_max"))
     assertTrue(source, source.contains("agbc_scala_longadd"))
@@ -368,10 +407,21 @@ class AgbccCodeGenTest {
     assertTrue(source, source.contains("Random(void)"))
     assertTrue(source, source.contains("SeedRng"))
     val agbcc = sys.env.get("AGBCC")
-    assumeTrue("set AGBCC to compile the Scala-exported backend output", agbcc.isDefined)
-    val objectFile = compile(source, "scala-export", out, agbcc.get,
-      sys.env.getOrElse("ARM_AS", "arm-none-eabi-as"))
-    assertTrue("agbcc did not produce an object for the Scala export", Files.size(objectFile) > 0)
+    assumeTrue(
+      "set AGBCC to compile the Scala-exported backend output",
+      agbcc.isDefined
+    )
+    val objectFile = compile(
+      source,
+      "scala-export",
+      out,
+      agbcc.get,
+      sys.env.getOrElse("ARM_AS", "arm-none-eabi-as")
+    )
+    assertTrue(
+      "agbcc did not produce an object for the Scala export",
+      Files.size(objectFile) > 0
+    )
     val oracle =
       """typedef signed int sn_i32;
         |typedef unsigned int sn_u32;
@@ -423,8 +473,12 @@ class AgbccCodeGenTest {
     val readelf = sys.env.getOrElse("ARM_READELF", "arm-none-eabi-readelf")
     assertArrayEquals(
       "Scala-exported function .text differs from agbcc semantic oracle",
-      Files.readAllBytes(extractSection(objcopy, oracleObject, "scala-oracle.text")),
-      Files.readAllBytes(extractSection(objcopy, objectFile, "scala-export.text"))
+      Files.readAllBytes(
+        extractSection(objcopy, oracleObject, "scala-oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy, objectFile, "scala-export.text")
+      )
     )
     assertEquals(
       "Scala-exported function relocations differ from agbcc semantic oracle",
@@ -450,7 +504,13 @@ class AgbccCodeGenTest {
       (Process(compiler, dir.toFile) #< cFile.toFile #> asmFile.toFile).!
     assertEquals("agbcc failed", 0, compileResult)
     val assembleResult = Process(
-      Seq(assembler, "-mcpu=arm7tdmi", "-o", objFile.toString, asmFile.toString),
+      Seq(
+        assembler,
+        "-mcpu=arm7tdmi",
+        "-o",
+        objFile.toString,
+        asmFile.toString
+      ),
       dir.toFile
     ).!
     assertEquals("ARM assembler failed", 0, assembleResult)
@@ -460,7 +520,14 @@ class AgbccCodeGenTest {
   private def extractSection(tool: String, obj: Path, out: String): Path = {
     val section = obj.getParent.resolve(out)
     val result = Process(
-      Seq(tool, "--only-section=.text", "-O", "binary", obj.toString, section.toString)
+      Seq(
+        tool,
+        "--only-section=.text",
+        "-O",
+        "binary",
+        obj.toString,
+        section.toString
+      )
     ).!
     assertEquals("objcopy failed", 0, result)
     section
@@ -468,14 +535,18 @@ class AgbccCodeGenTest {
 
   private def relocationRows(tool: String, obj: Path): Seq[String] = {
     val output = new StringBuilder
-    val result = Process(Seq(tool, "-rW", obj.toString)).!(ProcessLogger(
-      line => output.append(line).append('\n'),
-      line => output.append(line).append('\n')
-    ))
+    val result = Process(Seq(tool, "-rW", obj.toString)).!(
+      ProcessLogger(
+        line => output.append(line).append('\n'),
+        line => output.append(line).append('\n')
+      )
+    )
     assertEquals("readelf failed", 0, result)
     output.toString.linesIterator
       .map(_.trim)
-      .filter(_.matches("[0-9a-fA-F]+\\s+[0-9a-fA-F]+\\s+R_ARM_[A-Z0-9_]+\\s+.*"))
+      .filter(
+        _.matches("[0-9a-fA-F]+\\s+[0-9a-fA-F]+\\s+R_ARM_[A-Z0-9_]+\\s+.*")
+      )
       .toSeq
   }
 }

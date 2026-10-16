@@ -44,7 +44,8 @@ private[scalanative] object AgbccCodeGen {
     val exported = defns.collect {
       case defn: nir.Defn.Define
           if defn.name.sig.isExtern && defn.attrs.isExtern &&
-            !defn.attrs.isAbstract && !defn.attrs.isStub => defn
+            !defn.attrs.isAbstract && !defn.attrs.isStub =>
+        defn
     }
     if (requested.nonEmpty) {
       val available = exported.flatMap { defn =>
@@ -84,7 +85,8 @@ private[scalanative] object AgbccCodeGen {
       allDefns: Seq[nir.Defn]
   ): String = {
     val declarations = mutable.LinkedHashMap.empty[String, nir.Type.Function]
-    val declarationGlobals = mutable.LinkedHashMap.empty[String, nir.Global.Member]
+    val declarationGlobals =
+      mutable.LinkedHashMap.empty[String, nir.Global.Member]
     val definitions = mutable.ArrayBuffer.empty[nir.Defn.Define]
     val dataTypes = allDefns.collect {
       case d: nir.Defn.Var   => d.name -> d.ty
@@ -99,7 +101,8 @@ private[scalanative] object AgbccCodeGen {
           val nir.Sig.Extern(id) = sig.unmangled: @unchecked
           id
         case _: nir.Global.Member => "_S" + global.mangle
-        case _ => throw new BuildException(s"agbcc backend only emits methods: $global")
+        case _                    =>
+          throw new BuildException(s"agbcc backend only emits methods: $global")
       }
       name
     }
@@ -120,7 +123,7 @@ private[scalanative] object AgbccCodeGen {
         val escaped = name.flatMap {
           case '\\' => "\\\\"
           case '"'  => "\\\""
-          case c     => c.toString
+          case c    => c.toString
         }
         s" __asm__(\"$escaped\")"
       }
@@ -130,7 +133,9 @@ private[scalanative] object AgbccCodeGen {
       val id = symbol(name)
       declarations.get(id) match {
         case Some(existing) if existing != ty =>
-          throw new BuildException(s"conflicting agbcc signatures for $id: $existing and $ty")
+          throw new BuildException(
+            s"conflicting agbcc signatures for $id: $existing and $ty"
+          )
         case _ =>
           declarations(id) = ty
           declarationGlobals(id) = name
@@ -154,12 +159,12 @@ private[scalanative] object AgbccCodeGen {
         case nir.Inst.Let(_, nir.Op.Call(ty, nir.Val.Global(g, _), args), _) =>
           g match {
             case member: nir.Global.Member => addSignature(member, ty)
-            case _                         => unsupported(defn, s"call target $g")
+            case _ => unsupported(defn, s"call target $g")
           }
           args.foreach {
             noteData
           }
-        case nir.Inst.Let(_, nir.Op.Load(_, ptr, _), _) => noteData(ptr)
+        case nir.Inst.Let(_, nir.Op.Load(_, ptr, _), _)         => noteData(ptr)
         case nir.Inst.Let(_, nir.Op.Store(_, ptr, value, _), _) =>
           noteData(ptr)
           noteData(value)
@@ -184,38 +189,56 @@ private[scalanative] object AgbccCodeGen {
     out.append("typedef unsigned long long sn_u64;\n\n")
 
     def ctype(ty: nir.Type, where: String): String = ty match {
-      case nir.Type.Unit  => "void"
-      case nir.Type.Bool  => "sn_u8"
-      case nir.Type.Byte  => "sn_i8"
-      case nir.Type.Char  => "sn_u16"
-      case nir.Type.Short => "sn_i16"
-      case nir.Type.Int => "sn_i32"
-      case nir.Type.Size => "sn_u32"
-      case nir.Type.Long => "sn_i64"
+      case nir.Type.Unit                => "void"
+      case nir.Type.Bool                => "sn_u8"
+      case nir.Type.Byte                => "sn_i8"
+      case nir.Type.Char                => "sn_u16"
+      case nir.Type.Short               => "sn_i16"
+      case nir.Type.Int                 => "sn_i32"
+      case nir.Type.Size                => "sn_u32"
+      case nir.Type.Long                => "sn_i64"
       case nir.Type.Ptr | nir.Type.Null => "void *"
       case _: nir.Type.RefKind          => "void *"
-      case _ =>
-        throw new BuildException(s"agbcc backend does not support type ${ty.show} in $where")
+      case _                            =>
+        throw new BuildException(
+          s"agbcc backend does not support type ${ty.show} in $where"
+        )
     }
 
-    declarations.toSeq.sortBy(_._1).foreach { case (name, ty) =>
-      val args = ty.args.map(t => ctype(t, "function declaration argument"))
-      if (args.contains("void"))
-        throw new BuildException("agbcc backend does not support Unit function arguments")
-      out.append("extern ").append(ctype(ty.ret, "function return")).append(' ')
-        .append(cIdentifier(declarationGlobals(name))).append('(')
-        .append(if (args.isEmpty) "void" else args.mkString(", "))
-        .append(')').append(asmAlias(declarationGlobals(name))).append(";\n")
+    declarations.toSeq.sortBy(_._1).foreach {
+      case (name, ty) =>
+        val args = ty.args.map(t => ctype(t, "function declaration argument"))
+        if (args.contains("void"))
+          throw new BuildException(
+            "agbcc backend does not support Unit function arguments"
+          )
+        out
+          .append("extern ")
+          .append(ctype(ty.ret, "function return"))
+          .append(' ')
+          .append(cIdentifier(declarationGlobals(name)))
+          .append('(')
+          .append(if (args.isEmpty) "void" else args.mkString(", "))
+          .append(')')
+          .append(asmAlias(declarationGlobals(name)))
+          .append(";\n")
     }
     referencedData.toSeq.map(g => symbol(g) -> g).sortBy(_._1).foreach {
       case (_, global) =>
-        out.append("extern ").append(ctype(dataTypes(global), "global data"))
-          .append(' ').append(cIdentifier(global)).append(asmAlias(global)).append(";\n")
+        out
+          .append("extern ")
+          .append(ctype(dataTypes(global), "global data"))
+          .append(' ')
+          .append(cIdentifier(global))
+          .append(asmAlias(global))
+          .append(";\n")
     }
     if (declarations.nonEmpty) out.append('\n')
 
     definitions.sortBy(defn => symbol(defn.name)).foreach { defn =>
-      out.append(emitDefinition(defn, symbol, cIdentifier, ctype, referencedData.toSet))
+      out.append(
+        emitDefinition(defn, symbol, cIdentifier, ctype, referencedData.toSet)
+      )
       out.append('\n')
     }
     out.toString
@@ -270,7 +293,7 @@ private[scalanative] object AgbccCodeGen {
     val labels = defn.insts.collect { case label: Inst.Label => label }
     labels.drop(1).foreach(_.params.foreach(p => bind(p.id, p.ty)))
     defn.insts.drop(1).foreach {
-      case _: Inst.Label => ()
+      case _: Inst.Label            => ()
       case Inst.Let(id, op, unwind) =>
         if (unwind != Next.None) fail(s"exceptional operation ${op.show}")
         bind(id, op.resty)
@@ -281,41 +304,44 @@ private[scalanative] object AgbccCodeGen {
 
     def value(v: nir.Val): String = v match {
       case Val.Local(id, ty) =>
-        if (!localTypes.get(id).exists(_ == ty)) fail(s"unknown or mistyped local ${id.id}")
+        if (!localTypes.get(id).exists(_ == ty))
+          fail(s"unknown or mistyped local ${id.id}")
         localName(id)
-      case Val.True       => "1"
-      case Val.False      => "0"
-      case Val.Null       => "((void *)0)"
-      case Val.Zero(Type.Ptr) => "((void *)0)"
-      case Val.Zero(_)    => "0"
-      case Val.Byte(n)    => n.toString
-      case Val.Short(n)   => n.toString
-      case Val.Char(n)    => n.toInt.toString
-      case Val.Int(n) if n == Int.MinValue => "(-2147483647 - 1)"
-      case Val.Int(n)     => n.toString
-      case Val.Size(n) if n == Int.MinValue => "(-2147483647 - 1)"
-      case Val.Size(n)    => n.toString
+      case Val.True                          => "1"
+      case Val.False                         => "0"
+      case Val.Null                          => "((void *)0)"
+      case Val.Zero(Type.Ptr)                => "((void *)0)"
+      case Val.Zero(_)                       => "0"
+      case Val.Byte(n)                       => n.toString
+      case Val.Short(n)                      => n.toString
+      case Val.Char(n)                       => n.toInt.toString
+      case Val.Int(n) if n == Int.MinValue   => "(-2147483647 - 1)"
+      case Val.Int(n)                        => n.toString
+      case Val.Size(n) if n == Int.MinValue  => "(-2147483647 - 1)"
+      case Val.Size(n)                       => n.toString
       case Val.Long(n) if n == Long.MinValue => "(-9223372036854775807LL - 1LL)"
-      case Val.Long(n)    => s"${n}LL"
+      case Val.Long(n)                       => s"${n}LL"
       case Val.Global(g: nir.Global.Member, _) if dataSymbols(g) =>
         s"((void *)&${cIdentifier(g)})"
       case _ => fail(s"value ${v.show}")
     }
 
     def integerType(ty: nir.Type): Boolean = ty match {
-      case Type.Bool | Type.Byte | Type.Short | Type.Char | Type.Int | Type.Size | Type.Long => true
+      case Type.Bool | Type.Byte | Type.Short | Type.Char | Type.Int |
+          Type.Size | Type.Long =>
+        true
       case _ => false
     }
 
     def unsignedValue(v: String, ty: nir.Type, unsignedC: String): String =
       ty match {
-        case Type.Byte => s"(($unsignedC)(sn_u8)($v))"
+        case Type.Byte              => s"(($unsignedC)(sn_u8)($v))"
         case Type.Short | Type.Char => s"(($unsignedC)(sn_u16)($v))"
-        case _ => s"($unsignedC)($v)"
+        case _                      => s"($unsignedC)($v)"
       }
 
     def expression(op: nir.Op): String = op match {
-      case Op.Copy(v) => value(v)
+      case Op.Copy(v)             => value(v)
       case Op.Load(ty, ptr, None) =>
         s"(*(${ctype(ty, "load type")} *)(${value(ptr)}))"
       case Op.Load(_, _, Some(_)) => fail("atomic load")
@@ -331,7 +357,7 @@ private[scalanative] object AgbccCodeGen {
             val operator = bin match {
               case Bin.Iadd => "+"
               case Bin.Isub => "-"
-              case _         => "*"
+              case _        => "*"
             }
             s"((${ctype(ty, "integer operation")})(($unsignedC)($l) $operator ($unsignedC)($r)))"
           case Bin.Sdiv => s"(($signedC)($l) / ($signedC)($r))"
@@ -340,13 +366,13 @@ private[scalanative] object AgbccCodeGen {
           case Bin.Srem => s"(($signedC)($l) % ($signedC)($r))"
           case Bin.Urem =>
             s"(${unsignedValue(l, ty, unsignedC)} % ${unsignedValue(r, ty, unsignedC)})"
-          case Bin.And => s"($l & $r)"
-          case Bin.Or  => s"($l | $r)"
-          case Bin.Xor => s"($l ^ $r)"
-          case Bin.Shl => s"(($unsignedC)($l) << ($r))"
-          case Bin.Lshr => s"(($unsignedC)($l) >> ($r))"
+          case Bin.And               => s"($l & $r)"
+          case Bin.Or                => s"($l | $r)"
+          case Bin.Xor               => s"($l ^ $r)"
+          case Bin.Shl               => s"(($unsignedC)($l) << ($r))"
+          case Bin.Lshr              => s"(($unsignedC)($l) >> ($r))"
           case Bin.Ashr if !unsigned => s"(($signedC)($l) >> ($r))"
-          case _ => fail(s"binary operation ${bin.show}")
+          case _                     => fail(s"binary operation ${bin.show}")
         }
       case Op.Comp(comp, ty, left, right) if integerType(ty) =>
         val (operator, isUnsigned) = comp match {
@@ -360,7 +386,7 @@ private[scalanative] object AgbccCodeGen {
           case Comp.Uge => (">=", true)
           case Comp.Ult => ("<", true)
           case Comp.Ule => ("<=", true)
-          case _ => fail(s"comparison ${comp.show}")
+          case _        => fail(s"comparison ${comp.show}")
         }
         val cast = if (isUnsigned || ty == Type.Char || ty == Type.Size) {
           if (ty == Type.Long) "sn_u64" else "sn_u32"
@@ -384,15 +410,17 @@ private[scalanative] object AgbccCodeGen {
     val labelById = labels.map(label => label.id -> label).toMap
     def transfer(next: nir.Next): String = next match {
       case Next.Label(id, args) =>
-        val target = labelById.getOrElse(id, fail(s"unknown control-flow label ${id.id}"))
+        val target =
+          labelById.getOrElse(id, fail(s"unknown control-flow label ${id.id}"))
         if (args.length != target.params.length)
           fail(s"control-flow argument count for label ${id.id}")
         val goto = s"goto sn_label_${id.id};"
         if (args.isEmpty) goto
         else {
-          val declarations = target.params.zipWithIndex.map { case (param, i) =>
-            val where = s"block parameter ${param.id.id}"
-            s"${ctype(param.ty, where)} sn_edge_$i;"
+          val declarations = target.params.zipWithIndex.map {
+            case (param, i) =>
+              val where = s"block parameter ${param.id.id}"
+              s"${ctype(param.ty, where)} sn_edge_$i;"
           }
           val assignments = target.params.zip(args).zipWithIndex.map {
             case ((param, arg), i) =>
@@ -404,28 +432,38 @@ private[scalanative] object AgbccCodeGen {
     }
 
     def constantCase(v: nir.Val): String = v match {
-      case Val.Byte(n)  => n.toString
-      case Val.Short(n) => n.toString
-      case Val.Char(n)  => n.toInt.toString
-      case Val.Int(n)   => n.toString
-      case Val.Size(n)  => n.toString
+      case Val.Byte(n)                       => n.toString
+      case Val.Short(n)                      => n.toString
+      case Val.Char(n)                       => n.toInt.toString
+      case Val.Int(n)                        => n.toString
+      case Val.Size(n)                       => n.toString
       case Val.Long(n) if n == Long.MinValue => "(-9223372036854775807LL - 1LL)"
-      case Val.Long(n)  => s"${n}LL"
-      case Val.True     => "1"
-      case Val.False    => "0"
-      case _            => fail(s"switch case ${v.show}")
+      case Val.Long(n)                       => s"${n}LL"
+      case Val.True                          => "1"
+      case Val.False                         => "0"
+      case _                                 => fail(s"switch case ${v.show}")
     }
 
     val args = entry.params.map(p => localName(p.id))
     val result = new StringBuilder
     val functionHead =
-      s"${ctype(defn.ty.ret, "function return")} ${symbol(defn.name)}(${if (args.isEmpty) "void" else defn.ty.args.zip(args).map { case (t, n) => s"${ctype(t, "argument")} $n" }.mkString(", ")})"
+      s"${ctype(defn.ty.ret, "function return")} ${symbol(defn.name)}(${if (args.isEmpty) "void"
+        else
+          defn.ty.args
+            .zip(args)
+            .map { case (t, n) => s"${ctype(t, "argument")} $n" }
+            .mkString(", ")})"
     result.setLength(0)
     result.append(functionHead).append(" {\n")
-    localTypes.foreach { case (local, ty) =>
-      if (ty != Type.Unit && !entry.params.exists(_.id == local))
-        result.append("  ").append(ctype(ty, s"local ${local.id}")).append(' ')
-          .append(localName(local)).append(";\n")
+    localTypes.foreach {
+      case (local, ty) =>
+        if (ty != Type.Unit && !entry.params.exists(_.id == local))
+          result
+            .append("  ")
+            .append(ctype(ty, s"local ${local.id}"))
+            .append(' ')
+            .append(localName(local))
+            .append(";\n")
     }
     if (localTypes.nonEmpty) result.append('\n')
 
@@ -436,17 +474,31 @@ private[scalanative] object AgbccCodeGen {
         if (op.resty == Type.Unit) {
           op match {
             case Op.Store(ty, ptr, stored, None) =>
-              result.append("  *(").append(ctype(ty, "store type")).append(" *) (")
-                .append(value(ptr)).append(") = ").append(value(stored)).append(";\n")
+              result
+                .append("  *(")
+                .append(ctype(ty, "store type"))
+                .append(" *) (")
+                .append(value(ptr))
+                .append(") = ")
+                .append(value(stored))
+                .append(";\n")
             case Op.Store(_, _, _, Some(_)) => fail("atomic store")
             case Op.Call(_, Val.Global(g: nir.Global.Member, _), args) =>
-              result.append("  ").append(cIdentifier(g)).append('(')
-                .append(args.map(value).mkString(", ")).append(");\n")
+              result
+                .append("  ")
+                .append(cIdentifier(g))
+                .append('(')
+                .append(args.map(value).mkString(", "))
+                .append(");\n")
             case _ => fail(s"Unit operation ${op.show}")
           }
         } else {
-          result.append("  ").append(localName(id)).append(" = ")
-            .append(expression(op)).append(";\n")
+          result
+            .append("  ")
+            .append(localName(id))
+            .append(" = ")
+            .append(expression(op))
+            .append(";\n")
         }
       case Inst.Ret(v) =>
         result.append("  return")
@@ -455,20 +507,30 @@ private[scalanative] object AgbccCodeGen {
       case Inst.Jump(next) =>
         result.append("  ").append(transfer(next)).append('\n')
       case Inst.If(cond, thenp, elsep) =>
-        result.append("  if (").append(value(cond)).append(") ")
-          .append(transfer(thenp)).append(" else ").append(transfer(elsep)).append('\n')
+        result
+          .append("  if (")
+          .append(value(cond))
+          .append(") ")
+          .append(transfer(thenp))
+          .append(" else ")
+          .append(transfer(elsep))
+          .append('\n')
       case Inst.Switch(v, default, cases) =>
         result.append("  switch (").append(value(v)).append(") {\n")
         cases.foreach {
           case Next.Case(caseValue, next) =>
-            result.append("    case ").append(constantCase(caseValue))
-              .append(": ").append(transfer(next)).append('\n')
+            result
+              .append("    case ")
+              .append(constantCase(caseValue))
+              .append(": ")
+              .append(transfer(next))
+              .append('\n')
           case _ => fail("non-case switch successor")
         }
         result.append("    default: ").append(transfer(default)).append('\n')
         result.append("  }\n")
-      case Inst.Unreachable(_) => fail("unreachable instruction")
-      case Inst.Throw(_, _) => fail("throw instruction")
+      case Inst.Unreachable(_)      => fail("unreachable instruction")
+      case Inst.Throw(_, _)         => fail("throw instruction")
       case Inst.LinktimeIf(_, _, _) => fail("link-time branch")
     }
     result.append("}\n")

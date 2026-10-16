@@ -1,7 +1,7 @@
 package scala.scalanative.build
 
-import org.junit.Test
 import org.junit.Assert._
+import org.junit.Test
 
 class AgbccAbiTest {
   @Test def defaultProfileLeavesCompilerFlagsAlone(): Unit = {
@@ -34,6 +34,9 @@ class AgbccAbiTest {
       classOf[BuildException],
       () => AgbccAbi.compileFlags(Some("x86_64-unknown-linux-gnu"), true)
     )
-    assertThrows(classOf[BuildException], () => AgbccAbi.compileFlags(None, true))
+    assertThrows(
+      classOf[BuildException],
+      () => AgbccAbi.compileFlags(None, true)
+    )
   }
 }

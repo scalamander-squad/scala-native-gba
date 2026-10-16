@@ -21,6 +21,7 @@ fi
 if [[ "$CHECK_MODIFIED_ONLY" == "1" ]]; then
   git diff --name-only main | \
     grep -E '.*\.scala$' |
+    grep -E -v '^gba-testrom/' |
     xargs "$SCALAFMT"
 else
   $SCALAFMT "$@"
