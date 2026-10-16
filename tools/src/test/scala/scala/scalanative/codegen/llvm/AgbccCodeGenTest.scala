@@ -830,6 +830,85 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def switchControlFlowMatchesIndependentAgbccOracle(): Unit = {
+    val input = nir.Val.Local(nir.Local(701), nir.Type.Int)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_switch")),
+      nir.Type.Function(Seq(nir.Type.Int), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(700), Seq(input)),
+        nir.Inst.Switch(
+          input,
+          nir.Next.Label(nir.Local(704), Seq.empty),
+          Seq(
+            nir.Next.Case(
+              nir.Val.Int(0),
+              nir.Next.Label(nir.Local(702), Seq.empty)
+            ),
+            nir.Next.Case(
+              nir.Val.Int(1),
+              nir.Next.Label(nir.Local(703), Seq.empty)
+            )
+          )
+        ),
+        nir.Inst.Label(nir.Local(702), Seq.empty),
+        nir.Inst.Ret(nir.Val.Int(10)),
+        nir.Inst.Label(nir.Local(703), Seq.empty),
+        nir.Inst.Ret(nir.Val.Int(20)),
+        nir.Inst.Label(nir.Local(704), Seq.empty),
+        nir.Inst.Ret(nir.Val.Int(30))
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef signed int sn_i32;
+        |
+        |sn_i32 agbc_match_switch(sn_i32 sn_l701) {
+        |
+        |sn_label_700: ;
+        |  switch (sn_l701) {
+        |    case 0: goto sn_label_702;
+        |    case 1: goto sn_label_703;
+        |    default: goto sn_label_704;
+        |  }
+        |sn_label_702: ;
+        |  return 10;
+        |sn_label_703: ;
+        |  return 20;
+        |sn_label_704: ;
+        |  return 30;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for switch object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-switch-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
