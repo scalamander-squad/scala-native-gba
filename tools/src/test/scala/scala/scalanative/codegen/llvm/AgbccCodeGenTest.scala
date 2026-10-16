@@ -148,6 +148,56 @@ class AgbccCodeGenTest {
         )
       )
     }
+    def floatingBinary(
+        name: String,
+        bin: nir.Bin,
+        ty: nir.Type,
+        id: Int
+    ): nir.Defn.Define = {
+      val args = Seq(
+        nir.Val.Local(nir.Local(id + 1), ty),
+        nir.Val.Local(nir.Local(id + 2), ty)
+      )
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(ty, ty), ty),
+        Seq(
+          nir.Inst.Label(nir.Local(id), args),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Bin(bin, ty, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), ty))
+        )
+      )
+    }
+    def floatingComparison(
+        name: String,
+        comp: nir.Comp,
+        ty: nir.Type,
+        id: Int
+    ): nir.Defn.Define = {
+      val args = Seq(
+        nir.Val.Local(nir.Local(id + 1), ty),
+        nir.Val.Local(nir.Local(id + 2), ty)
+      )
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(ty, ty), nir.Type.Bool),
+        Seq(
+          nir.Inst.Label(nir.Local(id), args),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Comp(comp, ty, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Bool))
+        )
+      )
+    }
     val base = nir.Val.Local(nir.Local(82), nir.Type.Ptr)
     val index = nir.Val.Local(nir.Local(83), nir.Type.Int)
     val structElementPointer = nir.Defn.Define(
@@ -215,6 +265,28 @@ class AgbccCodeGenTest {
         nir.Inst.Ret(nir.Val.Local(nir.Local(114), pairType))
       )
     )
+    def aggregateMeasure(
+        name: String,
+        op: nir.Op,
+        id: Int
+    ): nir.Defn.Define =
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq.empty, nir.Type.Size),
+        Seq(
+          nir.Inst.Label(nir.Local(id), Seq.empty),
+          nir.Inst.Let(nir.Local(id + 1), op, nir.Next.None),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 1), nir.Type.Size))
+        )
+      )
+    val pairSize =
+      aggregateMeasure("agbc_match_size_pair", nir.Op.SizeOf(pairType), 171)
+    val pairAlignment = aggregateMeasure(
+      "agbc_match_align_pair",
+      nir.Op.AlignmentOf(pairType),
+      181
+    )
     val wordsType = nir.Type.ArrayValue(nir.Type.Int, 2)
     val words = nir.Val.Local(nir.Local(122), wordsType)
     val arrayExtract = nir.Defn.Define(
@@ -268,6 +340,9 @@ class AgbccCodeGenTest {
       arrayZero,
       call,
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
+      floatingBinary("agbc_match_fadd", nir.Bin.Fadd, nir.Type.Float, 201),
+      floatingBinary("agbc_match_fdiv", nir.Bin.Fdiv, nir.Type.Double, 211),
+      floatingComparison("agbc_match_flt", nir.Comp.Flt, nir.Type.Float, 221),
       integerComparison("agbc_match_ule16", nir.Comp.Ule, nir.Type.Short, 150),
       integerComparison("agbc_match_ult8", nir.Comp.Ult, nir.Type.Byte, 160),
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
@@ -276,6 +351,8 @@ class AgbccCodeGenTest {
       stackalloc,
       structExtract,
       structInsert,
+      pairSize,
+      pairAlignment,
       binary("agbc_match_udiv", nir.Bin.Udiv, 30),
       binary("agbc_match_rem", nir.Bin.Srem, 40),
       binary("agbc_match_urem", nir.Bin.Urem, 50),
@@ -430,18 +507,25 @@ class AgbccCodeGenTest {
         |typedef unsigned short sn_u16;
         |typedef signed int sn_i32;
         |typedef unsigned int sn_u32;
+        |typedef float sn_f32;
+        |typedef double sn_f64;
         |typedef struct { sn_i8 f0; sn_i32 f1; } sn_pair;
         |typedef struct { sn_i32 sn_values[2]; } sn_words;
         |
         |extern sn_i32 agb_match_leaf(sn_i32);
         |extern sn_i32 agbc_match_add(sn_i32, sn_i32);
+        |extern sn_u32 agbc_match_align_pair(void);
         |extern sn_i32 agbc_match_array_extract(sn_words);
         |extern sn_words agbc_match_array_insert(sn_words, sn_i32);
         |extern sn_words agbc_match_array_zero(void);
         |extern sn_i32 agbc_match_call(sn_i32);
         |extern sn_i32 agbc_match_div(sn_i32, sn_i32);
+        |extern sn_f32 agbc_match_fadd(sn_f32, sn_f32);
+        |extern sn_f64 agbc_match_fdiv(sn_f64, sn_f64);
+        |extern sn_u8 agbc_match_flt(sn_f32, sn_f32);
         |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_rem(sn_i32, sn_i32);
+        |extern sn_u32 agbc_match_size_pair(void);
         |extern sn_i32 agbc_match_urem(sn_i32, sn_i32);
         |extern sn_u8 agbc_match_ule16(sn_i16, sn_i16);
         |extern sn_u8 agbc_match_ult8(sn_i8, sn_i8);
@@ -459,6 +543,7 @@ class AgbccCodeGenTest {
         |  return sn_l3;
         |}
         |
+        |/* AGBC_ALIGN_PAIR_ORACLE */
         |/* AGBC_ARRAY_EXTRACT_ORACLE */
         |/* AGBC_ARRAY_INSERT_ORACLE */
         |/* AGBC_ARRAY_ZERO_ORACLE */
@@ -480,6 +565,10 @@ class AgbccCodeGenTest {
         |}
         |
         |/* AGBC_ELEM_ORACLE */
+        |/* AGBC_FADD_ORACLE */
+        |/* AGBC_FDIV_ORACLE */
+        |/* AGBC_FLT_ORACLE */
+        |
         |
         |sn_u8 agbc_match_ptr_eq(void * sn_l61, void * sn_l62) {
         |  sn_u8 sn_l63;
@@ -505,6 +594,7 @@ class AgbccCodeGenTest {
         |  return sn_l43;
         |}
         |
+        |/* AGBC_SIZE_PAIR_ORACLE */
         |/* AGBC_STACKALLOC_ORACLE */
         |/* AGBC_STRUCT_ORACLE */
         |/* AGBC_STRUCT_INSERT_ORACLE */
@@ -537,7 +627,47 @@ class AgbccCodeGenTest {
         |  return &((sn_elem_struct *)base)[index].f1;
         |}""".stripMargin
     )
-    val oracleWithStackalloc = oracleWithElem.replace(
+    val oracleWithPairAlignment = oracleWithElem.replace(
+      "/* AGBC_ALIGN_PAIR_ORACLE */",
+      """sn_u32 agbc_match_align_pair(void) {
+        |  sn_u32 sn_l182;
+        |
+        |sn_label_181: ;
+        |  sn_l182 = ((sn_i32)__alignof__(sn_pair));
+        |  return sn_l182;
+        |}""".stripMargin
+    )
+    val oracleWithFloatAdd = oracleWithPairAlignment.replace(
+      "/* AGBC_FADD_ORACLE */",
+      """sn_f32 agbc_match_fadd(sn_f32 sn_l202, sn_f32 sn_l203) {
+        |  sn_f32 sn_l204;
+        |
+        |sn_label_201: ;
+        |  sn_l204 = ((sn_f32)(sn_l202 + sn_l203));
+        |  return sn_l204;
+        |}""".stripMargin
+    )
+    val oracleWithFloatDiv = oracleWithFloatAdd.replace(
+      "/* AGBC_FDIV_ORACLE */",
+      """sn_f64 agbc_match_fdiv(sn_f64 sn_l212, sn_f64 sn_l213) {
+        |  sn_f64 sn_l214;
+        |
+        |sn_label_211: ;
+        |  sn_l214 = ((sn_f64)(sn_l212 / sn_l213));
+        |  return sn_l214;
+        |}""".stripMargin
+    )
+    val oracleWithFloatCompare = oracleWithFloatDiv.replace(
+      "/* AGBC_FLT_ORACLE */",
+      """sn_u8 agbc_match_flt(sn_f32 sn_l222, sn_f32 sn_l223) {
+        |  sn_u8 sn_l224;
+        |
+        |sn_label_221: ;
+        |  sn_l224 = ((sn_u8)((sn_l222) < (sn_l223)));
+        |  return sn_l224;
+        |}""".stripMargin
+    )
+    val oracleWithStackalloc = oracleWithFloatCompare.replace(
       "/* AGBC_STACKALLOC_ORACLE */",
       """void * agbc_match_stackalloc(sn_i32 count) {
         |  return __builtin_alloca(sizeof(sn_i32) * count);
@@ -557,7 +687,17 @@ class AgbccCodeGenTest {
         |  return result;
         |}""".stripMargin
     )
-    val oracleWithArrayExtract = oracleWithStructInsert.replace(
+    val oracleWithSizePair = oracleWithStructInsert.replace(
+      "/* AGBC_SIZE_PAIR_ORACLE */",
+      """sn_u32 agbc_match_size_pair(void) {
+        |  sn_u32 sn_l172;
+        |
+        |sn_label_171: ;
+        |  sn_l172 = ((sn_i32)sizeof(sn_pair));
+        |  return sn_l172;
+        |}""".stripMargin
+    )
+    val oracleWithArrayExtract = oracleWithSizePair.replace(
       "/* AGBC_ARRAY_EXTRACT_ORACLE */",
       """sn_i32 agbc_match_array_extract(sn_words value) {
         |  return value.sn_values[1];

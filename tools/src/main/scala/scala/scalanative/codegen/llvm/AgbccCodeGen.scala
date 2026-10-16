@@ -118,6 +118,7 @@ private[scalanative] object AgbccCodeGen {
             case nir.Op.Elem(ty, _, _)     => noteType(ty)
             case nir.Op.Stackalloc(ty, _)  => noteType(ty)
             case nir.Op.SizeOf(ty)         => noteType(ty)
+            case nir.Op.AlignmentOf(ty)    => noteType(ty)
             case _                         => ()
           }
         case nir.Inst.Ret(value) => noteType(value.ty)
@@ -421,6 +422,9 @@ private[scalanative] object AgbccCodeGen {
       case _ => false
     }
 
+    def floatingType(ty: nir.Type): Boolean =
+      ty == Type.Float || ty == Type.Double
+
     def aggregateAccess(
         root: String,
         rootType: nir.Type,
@@ -539,6 +543,15 @@ private[scalanative] object AgbccCodeGen {
           case Bin.Ashr if !unsigned => s"(($signedC)($l) >> ($r))"
           case _                     => fail(s"binary operation ${bin.show}")
         }
+      case Op.Bin(bin, ty, left, right) if floatingType(ty) =>
+        val operator = bin match {
+          case Bin.Fadd => "+"
+          case Bin.Fsub => "-"
+          case Bin.Fmul => "*"
+          case Bin.Fdiv => "/"
+          case _        => fail(s"floating binary operation ${bin.show}")
+        }
+        s"((${ctype(ty, "floating operation")})(${value(left)} $operator ${value(right)}))"
       case Op.Comp(comp, ty, left, right) if integerType(ty) =>
         val (operator, isUnsigned) = comp match {
           case Comp.Ieq => ("==", false)
@@ -571,6 +584,17 @@ private[scalanative] object AgbccCodeGen {
           case _        => fail(s"pointer comparison ${comp.show}")
         }
         s"((sn_u8)((${value(left)}) $operator (${value(right)})))"
+      case Op.Comp(comp, ty, left, right) if floatingType(ty) =>
+        val operator = comp match {
+          case Comp.Feq => "=="
+          case Comp.Fne => "!="
+          case Comp.Fgt => ">"
+          case Comp.Fge => ">="
+          case Comp.Flt => "<"
+          case Comp.Fle => "<="
+          case _        => fail(s"floating comparison ${comp.show}")
+        }
+        s"((sn_u8)((${value(left)}) $operator (${value(right)})))"
       case Op.Conv(conv, ty, v) if integerType(ty) || ty == Type.Ptr =>
         conv match {
           case Conv.Trunc | Conv.Zext | Conv.Sext | Conv.Bitcast |
@@ -582,6 +606,8 @@ private[scalanative] object AgbccCodeGen {
         s"${cIdentifier(g)}(${args.map(value).mkString(", ")})"
       case Op.SizeOf(ty) =>
         s"((sn_i32)sizeof(${ctype(ty, "sizeof")}))"
+      case Op.AlignmentOf(ty) =>
+        s"((sn_i32)__alignof__(${ctype(ty, "alignmentof")}))"
       case _ => fail(s"operation ${op.show}")
     }
 
