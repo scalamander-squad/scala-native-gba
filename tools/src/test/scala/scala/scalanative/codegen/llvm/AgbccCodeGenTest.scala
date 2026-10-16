@@ -287,6 +287,26 @@ class AgbccCodeGenTest {
       nir.Op.AlignmentOf(pairType),
       181
     )
+    val floatInput = nir.Val.Local(nir.Local(232), nir.Type.Float)
+    val floatMultiplyConstant = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_fmul_const")),
+      nir.Type.Function(Seq(nir.Type.Float), nir.Type.Float),
+      Seq(
+        nir.Inst.Label(nir.Local(231), Seq(floatInput)),
+        nir.Inst.Let(
+          nir.Local(233),
+          nir.Op.Bin(
+            nir.Bin.Fmul,
+            nir.Type.Float,
+            floatInput,
+            nir.Val.Float(0.5f)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(233), nir.Type.Float))
+      )
+    )
     val wordsType = nir.Type.ArrayValue(nir.Type.Int, 2)
     val words = nir.Val.Local(nir.Local(122), wordsType)
     val arrayExtract = nir.Defn.Define(
@@ -342,6 +362,7 @@ class AgbccCodeGenTest {
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
       floatingBinary("agbc_match_fadd", nir.Bin.Fadd, nir.Type.Float, 201),
       floatingBinary("agbc_match_fdiv", nir.Bin.Fdiv, nir.Type.Double, 211),
+      floatMultiplyConstant,
       floatingComparison("agbc_match_flt", nir.Comp.Flt, nir.Type.Float, 221),
       integerComparison("agbc_match_ule16", nir.Comp.Ule, nir.Type.Short, 150),
       integerComparison("agbc_match_ult8", nir.Comp.Ult, nir.Type.Byte, 160),
@@ -522,6 +543,7 @@ class AgbccCodeGenTest {
         |extern sn_i32 agbc_match_div(sn_i32, sn_i32);
         |extern sn_f32 agbc_match_fadd(sn_f32, sn_f32);
         |extern sn_f64 agbc_match_fdiv(sn_f64, sn_f64);
+        |extern sn_f32 agbc_match_fmul_const(sn_f32);
         |extern sn_u8 agbc_match_flt(sn_f32, sn_f32);
         |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_rem(sn_i32, sn_i32);
@@ -568,6 +590,7 @@ class AgbccCodeGenTest {
         |/* AGBC_FADD_ORACLE */
         |/* AGBC_FDIV_ORACLE */
         |/* AGBC_FLT_ORACLE */
+        |/* AGBC_FMUL_CONST_ORACLE */
         |
         |
         |sn_u8 agbc_match_ptr_eq(void * sn_l61, void * sn_l62) {
@@ -657,7 +680,17 @@ class AgbccCodeGenTest {
         |  return sn_l214;
         |}""".stripMargin
     )
-    val oracleWithFloatCompare = oracleWithFloatDiv.replace(
+    val oracleWithFloatConst = oracleWithFloatDiv.replace(
+      "/* AGBC_FMUL_CONST_ORACLE */",
+      """sn_f32 agbc_match_fmul_const(sn_f32 sn_l232) {
+        |  sn_f32 sn_l233;
+        |
+        |sn_label_231: ;
+        |  sn_l233 = ((sn_f32)(sn_l232 * 0.5f));
+        |  return sn_l233;
+        |}""".stripMargin
+    )
+    val oracleWithFloatCompare = oracleWithFloatConst.replace(
       "/* AGBC_FLT_ORACLE */",
       """sn_u8 agbc_match_flt(sn_f32 sn_l222, sn_f32 sn_l223) {
         |  sn_u8 sn_l224;

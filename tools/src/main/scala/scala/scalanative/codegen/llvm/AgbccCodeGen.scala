@@ -410,6 +410,14 @@ private[scalanative] object AgbccCodeGen {
       case Val.Size(n)                       => n.toString
       case Val.Long(n) if n == Long.MinValue => "(-9223372036854775807LL - 1LL)"
       case Val.Long(n)                       => s"${n}LL"
+      case Val.Float(n)
+          if java.lang.Float.isNaN(n) || java.lang.Float.isInfinite(n) =>
+        fail("non-finite float constant")
+      case Val.Float(n) => s"${n.toString}f"
+      case Val.Double(n)
+          if java.lang.Double.isNaN(n) || java.lang.Double.isInfinite(n) =>
+        fail("non-finite double constant")
+      case Val.Double(n)                                         => n.toString
       case Val.Global(g: nir.Global.Member, _) if dataSymbols(g) =>
         s"((void *)&${cIdentifier(g)})"
       case _ => fail(s"value ${v.show}")

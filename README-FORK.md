@@ -50,7 +50,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
-    signatures, integer arithmetic/bitwise operations, basic floating arithmetic, non-exceptional signed and unsigned integer division and
+    signatures, integer arithmetic/bitwise operations, basic floating arithmetic and finite literals, non-exceptional signed and unsigned integer division and
     remainder, integer and floating comparisons, pointer/reference equality, shifts and conversions, stack allocation, typed element-address
     calculations for nested struct/array paths, direct calls, scalar external global
     loads/stores, by-value aggregate signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch
@@ -59,7 +59,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
-    64-bit addition, single/double floating operations, aggregate zero initialization, and branch fixtures. An 8-bit unsigned division check also verifies
+    64-bit addition, single/double floating operations and a float literal, aggregate zero initialization, and branch fixtures. An 8-bit unsigned division check also verifies
     that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general
     aggregate and runtime lowering, broader NIR coverage, and ROM-level
     byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build
