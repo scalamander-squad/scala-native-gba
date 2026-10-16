@@ -41,17 +41,21 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     lowered Scala Native NIR through the game's actual agbcc compiler. It is opt-in, GBA-target-only, and requires
     `AGBCC` to point to agbcc; it also disables incremental compilation and LTO. The current emitter handles a
     deliberately narrow NIR subset (scalar integer and pointer signatures, integer arithmetic/bitwise operations,
-    comparisons and conversions, direct calls, `sizeof`, and simple label/branch/switch control flow). Unsupported
+    non-exceptional signed and unsigned division and remainder, comparisons and conversions, direct calls, `sizeof`,
+    and simple label/branch/switch control flow). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
-    signatures, arithmetic/bitwise operations, comparisons, shifts and conversions, direct calls, scalar external
-    global loads/stores, `sizeof`, and label/branch/switch control flow. A Scala 3 frontend test sends exported
+    signatures, arithmetic/bitwise operations, non-exceptional signed and unsigned division and remainder,
+    comparisons, shifts and conversions, direct calls, scalar external global loads/stores, `sizeof`, and
+    label/branch/switch control flow. A Scala 3 frontend test sends exported
     `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
     optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
-    oracle, as do additional integer arithmetic, 64-bit addition, and branch fixtures. These checks establish a
-    narrow real-NIR-to-agbcc path; object, aggregate and general runtime lowering, broader NIR coverage, and ROM-level
+    oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
+    64-bit addition, and branch fixtures. An 8-bit unsigned division check also verifies that operands are zero-extended
+    before division. These checks establish a narrow real-NIR-to-agbcc path; object,
+    aggregate and general runtime lowering, broader NIR coverage, and ROM-level
     byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build
     environments must set `AGBCC` and provide `ARM_AS` or `arm-none-eabi-as`. The parity test is
     `toolsJVM3/Test/testOnly scala.scalanative.codegen.llvm.AgbccCodeGenTest` with `AGBCC`, `ARM_AS`,

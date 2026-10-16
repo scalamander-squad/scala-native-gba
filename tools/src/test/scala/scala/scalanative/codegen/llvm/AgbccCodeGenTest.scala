@@ -78,18 +78,48 @@ class AgbccCodeGenTest {
       leaf,
       nir.Type.Function(Seq(i32), i32)
     )
-    Seq(add, call, leafDecl)
+    def binary(name: String, bin: nir.Bin, id: Int): nir.Defn.Define = {
+      val args = Seq(
+        nir.Val.Local(nir.Local(id + 1), i32),
+        nir.Val.Local(nir.Local(id + 2), i32)
+      )
+      function(
+        name,
+        Seq(i32, i32),
+        Seq(
+          nir.Inst.Label(nir.Local(id), args),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Bin(bin, i32, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), i32))
+        )
+      )
+    }
+    Seq(
+      add,
+      call,
+      binary("agbc_match_div", nir.Bin.Sdiv, 20),
+      binary("agbc_match_udiv", nir.Bin.Udiv, 30),
+      binary("agbc_match_rem", nir.Bin.Srem, 40),
+      binary("agbc_match_urem", nir.Bin.Urem, 50),
+      leafDecl
+    )
   }
 
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
     assertTrue(source.contains("agbc_match_call(sn_i32 sn_l11)"))
+    assertTrue(source.contains("agbc_match_div(sn_i32 sn_l21, sn_i32 sn_l22)"))
+    assertTrue(source.contains("agbc_match_udiv(sn_i32 sn_l31, sn_i32 sn_l32)"))
     assertTrue(source.contains("agb_match_leaf(sn_l11)"))
     assertTrue(source.contains("sn_l3 = ((sn_i32)((sn_u32)(sn_l1) + (sn_u32)(sn_l2)))"))
+    assertTrue(source.contains("sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22))"))
   }
 
-  @Test def unsupportedOperationsFailClosedAndDefaultConfigStaysLlvm(): Unit = {
+  @Test def integerDivisionAndRemainderAreEmittedAndDefaultConfigStaysLlvm(): Unit = {
     val base = NativeConfig.empty
     assertFalse("agbcc backend must remain opt-in", base.agbccCodegen)
     assertTrue("default export filter must be empty", base.agbccCodegenExports.isEmpty)
@@ -104,26 +134,56 @@ class AgbccCodeGenTest {
       nir.Val.Local(nir.Local(1), i32),
       nir.Val.Local(nir.Local(2), i32)
     )
-    val division = function(
-      "agbc_unsupported_division",
-      Seq(i32, i32),
+    def binary(name: String, bin: nir.Bin): nir.Defn.Define =
+      function(
+        name,
+        Seq(i32, i32),
+        Seq(
+          nir.Inst.Label(nir.Local(0), args),
+          nir.Inst.Let(
+            nir.Local(3),
+            nir.Op.Bin(bin, i32, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(3), i32))
+        )
+      )
+    val source = AgbccCodeGen.emit(Seq(
+      binary("agbc_sdiv", nir.Bin.Sdiv),
+      binary("agbc_udiv", nir.Bin.Udiv),
+      binary("agbc_srem", nir.Bin.Srem),
+      binary("agbc_urem", nir.Bin.Urem)
+    ))
+    assertTrue(source, source.contains("((sn_i32)(sn_l1) / (sn_i32)(sn_l2))"))
+    assertTrue(source, source.contains("((sn_u32)(sn_l1) / (sn_u32)(sn_l2))"))
+    assertTrue(source, source.contains("((sn_i32)(sn_l1) % (sn_i32)(sn_l2))"))
+    assertTrue(source, source.contains("((sn_u32)(sn_l1) % (sn_u32)(sn_l2))"))
+
+    val narrowArgs = Seq(
+      nir.Val.Local(nir.Local(11), nir.Type.Byte),
+      nir.Val.Local(nir.Local(12), nir.Type.Byte)
+    )
+    val narrowDivision = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_udiv8")),
+      nir.Type.Function(Seq(nir.Type.Byte, nir.Type.Byte), nir.Type.Byte),
       Seq(
-        nir.Inst.Label(nir.Local(0), args),
+        nir.Inst.Label(nir.Local(10), narrowArgs),
         nir.Inst.Let(
-          nir.Local(3),
-          nir.Op.Bin(nir.Bin.Sdiv, i32, args(0), args(1)),
+          nir.Local(13),
+          nir.Op.Bin(nir.Bin.Udiv, nir.Type.Byte, narrowArgs(0), narrowArgs(1)),
           nir.Next.None
         ),
-        nir.Inst.Ret(nir.Val.Local(nir.Local(3), i32))
+        nir.Inst.Ret(nir.Val.Local(nir.Local(13), nir.Type.Byte))
       )
     )
-    try {
-      AgbccCodeGen.emit(Seq(division))
-      fail("signed division should be rejected until its agbcc lowering is verified")
-    } catch {
-      case error: BuildException =>
-        assertTrue(error.getMessage, error.getMessage.contains("does not support binary operation sdiv"))
-    }
+    val narrowSource = AgbccCodeGen.emit(Seq(narrowDivision))
+    assertTrue(
+      narrowSource,
+      narrowSource.contains(
+        "((sn_u32)(sn_u8)(sn_l11)) / ((sn_u32)(sn_u8)(sn_l12))"
+      )
+    )
 
     val wrongTarget = base
       .withTargetTriple("x86_64-unknown-linux-gnu")
@@ -159,6 +219,10 @@ class AgbccCodeGenTest {
         |extern sn_i32 agb_match_leaf(sn_i32);
         |extern sn_i32 agbc_match_add(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_call(sn_i32);
+        |extern sn_i32 agbc_match_div(sn_i32, sn_i32);
+        |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
+        |extern sn_i32 agbc_match_rem(sn_i32, sn_i32);
+        |extern sn_i32 agbc_match_urem(sn_i32, sn_i32);
         |
         |sn_i32 agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2) {
         |  sn_i32 sn_l3;
@@ -174,6 +238,38 @@ class AgbccCodeGenTest {
         |sn_label_10: ;
         |  sn_l12 = agb_match_leaf(sn_l11);
         |  return sn_l12;
+        |}
+        |
+        |sn_i32 agbc_match_div(sn_i32 sn_l21, sn_i32 sn_l22) {
+        |  sn_i32 sn_l23;
+        |
+        |sn_label_20: ;
+        |  sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22));
+        |  return sn_l23;
+        |}
+        |
+        |sn_i32 agbc_match_rem(sn_i32 sn_l41, sn_i32 sn_l42) {
+        |  sn_i32 sn_l43;
+        |
+        |sn_label_40: ;
+        |  sn_l43 = ((sn_i32)(sn_l41) % (sn_i32)(sn_l42));
+        |  return sn_l43;
+        |}
+        |
+        |sn_i32 agbc_match_udiv(sn_i32 sn_l31, sn_i32 sn_l32) {
+        |  sn_i32 sn_l33;
+        |
+        |sn_label_30: ;
+        |  sn_l33 = ((sn_u32)(sn_l31) / (sn_u32)(sn_l32));
+        |  return sn_l33;
+        |}
+        |
+        |sn_i32 agbc_match_urem(sn_i32 sn_l51, sn_i32 sn_l52) {
+        |  sn_i32 sn_l53;
+        |
+        |sn_label_50: ;
+        |  sn_l53 = ((sn_u32)(sn_l51) % (sn_u32)(sn_l52));
+        |  return sn_l53;
         |}
         |""".stripMargin
 

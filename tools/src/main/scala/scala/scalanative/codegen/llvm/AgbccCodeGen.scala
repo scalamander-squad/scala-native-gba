@@ -307,6 +307,13 @@ private[scalanative] object AgbccCodeGen {
       case _ => false
     }
 
+    def unsignedValue(v: String, ty: nir.Type, unsignedC: String): String =
+      ty match {
+        case Type.Byte => s"(($unsignedC)(sn_u8)($v))"
+        case Type.Short | Type.Char => s"(($unsignedC)(sn_u16)($v))"
+        case _ => s"($unsignedC)($v)"
+      }
+
     def expression(op: nir.Op): String = op match {
       case Op.Copy(v) => value(v)
       case Op.Load(ty, ptr, None) =>
@@ -327,6 +334,12 @@ private[scalanative] object AgbccCodeGen {
               case _         => "*"
             }
             s"((${ctype(ty, "integer operation")})(($unsignedC)($l) $operator ($unsignedC)($r)))"
+          case Bin.Sdiv => s"(($signedC)($l) / ($signedC)($r))"
+          case Bin.Udiv =>
+            s"(${unsignedValue(l, ty, unsignedC)} / ${unsignedValue(r, ty, unsignedC)})"
+          case Bin.Srem => s"(($signedC)($l) % ($signedC)($r))"
+          case Bin.Urem =>
+            s"(${unsignedValue(l, ty, unsignedC)} % ${unsignedValue(r, ty, unsignedC)})"
           case Bin.And => s"($l & $r)"
           case Bin.Or  => s"($l | $r)"
           case Bin.Xor => s"($l ^ $r)"
