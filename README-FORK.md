@@ -56,10 +56,10 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     shifts, conversions and same-width float/integer bitcasts, stack allocation, typed element-address calculations for nested struct/array paths, direct
     calls, typed indirect calls, C varargs call sites, external scalar/aggregate global references, scalar and aggregate
     loads/stores, by-value aggregate
-    signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow. A Scala 3
-    frontend test sends exported
-    `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
-    optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
+    signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow. Scala 3
+    frontend tests send exported arithmetic/control-flow functions, float bit reinterpretations, and `Random()`/
+    `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking, optimization/lowering, and
+    agbcc. Their emitted `.text` bytes and relocations match an independently authored C
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,

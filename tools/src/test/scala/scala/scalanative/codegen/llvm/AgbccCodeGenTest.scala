@@ -949,77 +949,35 @@ class AgbccCodeGenTest {
         |typedef float sn_f32;
         |typedef double sn_f64;
         |
-        |static sn_i32 sn_bitcast_f32_to_i32(sn_f32 value) {
+        |sn_i32 agbc_match_f32_to_i32(sn_f32 value) {
         |  union { sn_f32 from; sn_i32 to; } bits;
         |  bits.from = value;
         |  return bits.to;
         |}
-        |static sn_u32 sn_bitcast_f32_to_u32(sn_f32 value) {
+        |sn_u32 agbc_match_f32_to_u32(sn_f32 value) {
         |  union { sn_f32 from; sn_u32 to; } bits;
         |  bits.from = value;
         |  return bits.to;
         |}
-        |static sn_f32 sn_bitcast_i32_to_f32(sn_i32 value) {
-        |  union { sn_i32 from; sn_f32 to; } bits;
-        |  bits.from = value;
-        |  return bits.to;
-        |}
-        |static sn_f32 sn_bitcast_u32_to_f32(sn_u32 value) {
-        |  union { sn_u32 from; sn_f32 to; } bits;
-        |  bits.from = value;
-        |  return bits.to;
-        |}
-        |static sn_i64 sn_bitcast_f64_to_i64(sn_f64 value) {
+        |sn_i64 agbc_match_f64_to_i64(sn_f64 value) {
         |  union { sn_f64 from; sn_i64 to; } bits;
         |  bits.from = value;
         |  return bits.to;
         |}
-        |static sn_f64 sn_bitcast_i64_to_f64(sn_i64 value) {
+        |sn_f32 agbc_match_i32_to_f32(sn_i32 value) {
+        |  union { sn_i32 from; sn_f32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |sn_f64 agbc_match_i64_to_f64(sn_i64 value) {
         |  union { sn_i64 from; sn_f64 to; } bits;
         |  bits.from = value;
         |  return bits.to;
         |}
-        |sn_i32 agbc_match_f32_to_i32(sn_f32 sn_l1101) {
-        |  sn_i32 sn_l1102;
-        |
-        |sn_label_1100: ;
-        |  sn_l1102 = sn_bitcast_f32_to_i32(sn_l1101);
-        |  return sn_l1102;
-        |}
-        |sn_u32 agbc_match_f32_to_u32(sn_f32 sn_l1141) {
-        |  sn_u32 sn_l1142;
-        |
-        |sn_label_1140: ;
-        |  sn_l1142 = sn_bitcast_f32_to_u32(sn_l1141);
-        |  return sn_l1142;
-        |}
-        |sn_i64 agbc_match_f64_to_i64(sn_f64 sn_l1121) {
-        |  sn_i64 sn_l1122;
-        |
-        |sn_label_1120: ;
-        |  sn_l1122 = sn_bitcast_f64_to_i64(sn_l1121);
-        |  return sn_l1122;
-        |}
-        |sn_f32 agbc_match_i32_to_f32(sn_i32 sn_l1111) {
-        |  sn_f32 sn_l1112;
-        |
-        |sn_label_1110: ;
-        |  sn_l1112 = sn_bitcast_i32_to_f32(sn_l1111);
-        |  return sn_l1112;
-        |}
-        |sn_f64 agbc_match_i64_to_f64(sn_i64 sn_l1131) {
-        |  sn_f64 sn_l1132;
-        |
-        |sn_label_1130: ;
-        |  sn_l1132 = sn_bitcast_i64_to_f64(sn_l1131);
-        |  return sn_l1132;
-        |}
-        |sn_f32 agbc_match_u32_to_f32(sn_u32 sn_l1151) {
-        |  sn_f32 sn_l1152;
-        |
-        |sn_label_1150: ;
-        |  sn_l1152 = sn_bitcast_u32_to_f32(sn_l1151);
-        |  return sn_l1152;
+        |sn_f32 agbc_match_u32_to_f32(sn_u32 value) {
+        |  union { sn_u32 from; sn_f32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
         |}""".stripMargin
     val agbcc = sys.env.get("AGBCC")
     val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
@@ -1523,6 +1481,10 @@ class AgbccCodeGenTest {
           |  def longAdd(a: Long, b: Long): Long = a + b
           |  @scala.scalanative.unsafe.exported("agbc_scala_muladd")
           |  def mulAdd(a: Int, b: Int, c: Int): Int = a * b + c
+          |  @scala.scalanative.unsafe.exported("agbc_scala_float_bits")
+          |  def floatBits(value: Float): Int = java.lang.Float.floatToRawIntBits(value)
+          |  @scala.scalanative.unsafe.exported("agbc_scala_bits_float")
+          |  def bitsFloat(value: Int): Float = java.lang.Float.intBitsToFloat(value)
           |}
           |@scala.scalanative.unsafe.extern
           |object AgbccRngState {
@@ -1563,6 +1525,8 @@ class AgbccCodeGenTest {
           "agbc_scala_longadd",
           "agbc_scala_max",
           "agbc_scala_muladd",
+          "agbc_scala_float_bits",
+          "agbc_scala_bits_float",
           "Random",
           "SeedRng"
         )
@@ -1602,6 +1566,10 @@ class AgbccCodeGenTest {
     assertTrue(source, source.contains("agbc_scala_max"))
     assertTrue(source, source.contains("agbc_scala_longadd"))
     assertTrue(source, source.contains("agbc_scala_muladd"))
+    assertTrue(source, source.contains("agbc_scala_float_bits"))
+    assertTrue(source, source.contains("agbc_scala_bits_float"))
+    assertTrue(source, source.contains("union { sn_f32 from; sn_i32 to; }"))
+    assertTrue(source, source.contains("union { sn_i32 from; sn_f32 to; }"))
     assertTrue(source, source.contains("Random(void)"))
     assertTrue(source, source.contains("SeedRng"))
     val agbcc = sys.env.get("AGBCC")
@@ -1626,6 +1594,7 @@ class AgbccCodeGenTest {
         |typedef unsigned char sn_u8;
         |typedef signed long long sn_i64;
         |typedef unsigned long long sn_u64;
+        |typedef float sn_f32;
         |extern sn_u32 gRngValue;
         |extern sn_u32 xlat_random_sRandCount;
         |extern sn_u8 xlat_random_sUnknown;
@@ -1641,6 +1610,16 @@ class AgbccCodeGenTest {
         |}
         |sn_i32 agbc_scala_add(sn_i32 a, sn_i32 b) {
         |  return (sn_i32)((sn_u32)a + (sn_u32)b);
+        |}
+        |sn_f32 agbc_scala_bits_float(sn_i32 value) {
+        |  union { sn_i32 from; sn_f32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |sn_i32 agbc_scala_float_bits(sn_f32 value) {
+        |  union { sn_f32 from; sn_i32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
         |}
         |sn_i64 agbc_scala_longadd(sn_i64 a, sn_i64 b) {
         |  return (sn_i64)((sn_u64)a + (sn_u64)b);

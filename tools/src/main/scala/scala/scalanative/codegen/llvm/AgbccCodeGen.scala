@@ -259,16 +259,6 @@ private[scalanative] object AgbccCodeGen {
     declarations.values.foreach(noteType)
     referencedData.foreach(global => noteType(dataTypes(global)))
 
-    val floatingBitcasts = definitions
-      .flatMap { defn =>
-        defn.insts.collect {
-          case nir.Inst.Let(_, nir.Op.Conv(nir.Conv.Bitcast, to, from), _) =>
-            floatingBitcast(from.ty, to)
-        }
-      }
-      .flatten
-      .distinct
-
     val out = new StringBuilder
     out.append("typedef signed char sn_i8;\n")
     out.append("typedef unsigned char sn_u8;\n")
@@ -371,22 +361,6 @@ private[scalanative] object AgbccCodeGen {
     }
     if (declarations.nonEmpty) out.append('\n')
 
-    floatingBitcasts.foreach { bitcast =>
-      out
-        .append("static ")
-        .append(bitcast.toCType)
-        .append(' ')
-        .append(bitcast.name)
-        .append('(')
-        .append(bitcast.fromCType)
-        .append(" value) { union { ")
-        .append(bitcast.fromCType)
-        .append(" from; ")
-        .append(bitcast.toCType)
-        .append(" to; } bits; bits.from = value; return bits.to; }\n")
-    }
-    if (floatingBitcasts.nonEmpty) out.append('\n')
-
     definitions.sortBy(defn => symbol(defn.name)).foreach { defn =>
       out.append(
         emitDefinition(
@@ -442,7 +416,6 @@ private[scalanative] object AgbccCodeGen {
   }
 
   private final case class FloatingBitcast(
-      name: String,
       fromCType: String,
       toCType: String
   )
@@ -451,28 +424,22 @@ private[scalanative] object AgbccCodeGen {
       from: nir.Type,
       to: nir.Type
   ): Option[FloatingBitcast] = {
-    val (fromName, fromCType, toName, toCType) = (from, to) match {
+    val (fromCType, toCType) = (from, to) match {
       case (nir.Type.Float, nir.Type.Int) =>
-        ("f32", "sn_f32", "i32", "sn_i32")
+        ("sn_f32", "sn_i32")
       case (nir.Type.Float, nir.Type.Size) =>
-        ("f32", "sn_f32", "u32", "sn_u32")
+        ("sn_f32", "sn_u32")
       case (nir.Type.Int, nir.Type.Float) =>
-        ("i32", "sn_i32", "f32", "sn_f32")
+        ("sn_i32", "sn_f32")
       case (nir.Type.Size, nir.Type.Float) =>
-        ("u32", "sn_u32", "f32", "sn_f32")
+        ("sn_u32", "sn_f32")
       case (nir.Type.Double, nir.Type.Long) =>
-        ("f64", "sn_f64", "i64", "sn_i64")
+        ("sn_f64", "sn_i64")
       case (nir.Type.Long, nir.Type.Double) =>
-        ("i64", "sn_i64", "f64", "sn_f64")
+        ("sn_i64", "sn_f64")
       case _ => return None
     }
-    Some(
-      FloatingBitcast(
-        s"sn_bitcast_${fromName}_to_$toName",
-        fromCType,
-        toCType
-      )
-    )
+    Some(FloatingBitcast(fromCType, toCType))
   }
 
   private def integerWidth(ty: nir.Type): Option[Int] = ty match {
@@ -521,6 +488,11 @@ private[scalanative] object AgbccCodeGen {
         if (unwind != Next.None) fail(s"exceptional operation ${op.show}")
         bind(id, op.resty)
       case _ =>
+    }
+    val floatingBitcastLocals = defn.insts.flatMap {
+      case Inst.Let(id, Op.Conv(Conv.Bitcast, to, from), _) =>
+        floatingBitcast(from.ty, to).map(id -> _)
+      case _ => None
     }
 
     def localName(local: nir.Local): String = s"sn_l${local.id}"
@@ -741,7 +713,7 @@ private[scalanative] object AgbccCodeGen {
         s"((sn_u8)((${value(left)}) $operator (${value(right)})))"
       case Op.Conv(Conv.Bitcast, ty, v) =>
         floatingBitcast(v.ty, ty) match {
-          case Some(bitcast) => s"${bitcast.name}(${value(v)})"
+          case Some(_) => fail("floating bitcast outside a local instruction")
           case None
               if pointerType(ty) && pointerType(v.ty) ||
                 integerWidth(ty).isDefined &&
@@ -837,6 +809,17 @@ private[scalanative] object AgbccCodeGen {
             .append(localName(local))
             .append(";\n")
     }
+    floatingBitcastLocals.foreach {
+      case (local, bitcast) =>
+        result
+          .append("  union { ")
+          .append(bitcast.fromCType)
+          .append(" from; ")
+          .append(bitcast.toCType)
+          .append(" to; } sn_bitcast_")
+          .append(local.id)
+          .append(";\n")
+    }
     if (localTypes.nonEmpty) result.append('\n')
 
     defn.insts.foreach {
@@ -868,6 +851,19 @@ private[scalanative] object AgbccCodeGen {
           }
         } else {
           op match {
+            case Op.Conv(Conv.Bitcast, ty, from)
+                if floatingBitcast(from.ty, ty).isDefined =>
+              val temporary = s"sn_bitcast_${id.id}"
+              result
+                .append("  ")
+                .append(temporary)
+                .append(".from = ")
+                .append(value(from))
+                .append(";\n  ")
+                .append(localName(id))
+                .append(" = ")
+                .append(temporary)
+                .append(".to;\n")
             case Op.Insert(aggregate, stored, indexes) =>
               if (indexes.isEmpty) fail("empty aggregate insertion path")
               result
