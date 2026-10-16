@@ -66,11 +66,12 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     aggregate loads/stores and zero initialization, indirect and variadic calls, float/double remainder call emission,
     bitwise logic, all shift variants,
     32-bit float/integer and 64-bit double/long bitcasts, compiler fences, and scalar atomic access,
-    signed/unsigned comparisons, and branch fixtures. Floating remainder currently emits calls to `fmodf`/`fmod`;
-    the classic agbcc ROM link (`-lgcc -lc`) does not provide those symbols, so the object-parity fixtures do not
-    establish that a floating-remainder user can link into a ROM. A compatible runtime implementation or an explicit
-    libm dependency is still needed before using that operation in the game. Variadic function definitions are still
-    rejected. Atomic loads/stores are limited to scalar types no wider than 32 bits; acquire/release
+    signed/unsigned comparisons, and branch fixtures. Floating remainder emits a local fdlibm-derived shift/subtract
+    helper because the classic agbcc ROM link (`-lgcc -lc`) does not provide `fmodf`/`fmod`; tests compare it with the
+    host C library across 4,096 deterministic input pairs per precision plus explicit subnormal, signed-zero,
+    infinity, and zero-divisor cases.
+    Variadic function definitions are still rejected. Atomic loads/stores are limited to scalar types no wider than
+    32 bits; acquire/release
     ordering uses compiler memory clobbers, which emit no ARM7TDMI instructions. An 8-bit unsigned division check also verifies
     that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general
     aggregate and runtime lowering, broader NIR coverage, and ROM-level

@@ -1127,7 +1127,7 @@ class AgbccCodeGenTest {
     )
   }
 
-  @Test def floatingRemainderCallsMatchIndependentAgbccOracle(): Unit = {
+  @Test def floatingRemainderUsesSelfContainedAgbccHelper(): Unit = {
     def remainder(
         name: String,
         ty: nir.Type,
@@ -1158,24 +1158,29 @@ class AgbccCodeGenTest {
     )
     val generated = AgbccCodeGen.emit(definitions)
     val oracle =
-      """typedef float sn_f32;
+      """typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef float sn_f32;
         |typedef double sn_f64;
-        |extern sn_f32 fmodf(sn_f32, sn_f32);
-        |extern sn_f64 fmod(sn_f64, sn_f64);
-        |sn_f64 agbc_match_drem(sn_f64 sn_l1411, sn_f64 sn_l1412) {
-        |  sn_f64 sn_l1413;
-        |
-        |sn_label_1410: ;
-        |  sn_l1413 = fmod(sn_l1411, sn_l1412);
-        |  return sn_l1413;
-        |}
-        |sn_f32 agbc_match_frem(sn_f32 sn_l1401, sn_f32 sn_l1402) {
-        |  sn_f32 sn_l1403;
-        |
-        |sn_label_1400: ;
-        |  sn_l1403 = fmodf(sn_l1401, sn_l1402);
-        |  return sn_l1403;
-        |}""".stripMargin
+        |""".stripMargin + AgbccCodeGen.FloatingRemainderSupport +
+        """
+          |sn_f64 agbc_match_drem(sn_f64 sn_l1411, sn_f64 sn_l1412) {
+          |  sn_f64 sn_l1413;
+          |
+          |sn_label_1410: ;
+          |  sn_l1413 = sn_agbcc_fmod64(sn_l1411, sn_l1412);
+          |  return sn_l1413;
+          |}
+          |sn_f32 agbc_match_frem(sn_f32 sn_l1401, sn_f32 sn_l1402) {
+          |  sn_f32 sn_l1403;
+          |
+          |sn_label_1400: ;
+          |  sn_l1403 = sn_agbcc_fmod32(sn_l1401, sn_l1402);
+          |  return sn_l1403;
+          |}""".stripMargin
+    assertFalse(generated.contains("fmodf("))
+    assertFalse(generated.contains("= fmod("))
+    assertTrue(generated.contains("static sn_f64 sn_agbcc_fmod("))
     val agbcc = sys.env.get("AGBCC")
     val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
     val objcopy =
@@ -1190,7 +1195,8 @@ class AgbccCodeGenTest {
     val dir = Files.createTempDirectory("sn-agbcc-frem-test")
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
-    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val oracleObject =
+      compile(oracle, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
@@ -1203,6 +1209,113 @@ class AgbccCodeGenTest {
       "relocation rows differ",
       relocationRows(readelf.get, oracleObject),
       relocationRows(readelf.get, generatedObject)
+    )
+    assertFalse(
+      "generated object must not depend on a missing libm fmod symbol",
+      relocationRows(readelf.get, generatedObject).exists(_.contains("fmod"))
+    )
+
+    val semanticHarness =
+      """#include <math.h>
+        |#include <stdio.h>
+        |typedef union { double value; unsigned long long bits; } sn_test_f64;
+        |typedef union { float value; unsigned int bits; } sn_test_f32;
+        |int main(void) {
+        |  static const double values[] = {
+        |    5.3, -5.3, 1.0e300, -1.0e300, 1.0e-300, -1.0e-300,
+        |    2.2250738585072014e-308, 1.7976931348623157e308,
+        |    0x0.0000000000001p-1022, 0x0.fffffffffffffp-1022, -0.0
+        |  };
+        |  static const double divisors[] = { 2.0, 2.0, 3.0, 7.0, 3.0,
+        |    7.0, 1.0e-308, 1.0e292, 0x0.0000000000002p-1022,
+        |    0x0.0000000000001p-1022, 1.0 };
+        |  sn_test_f64 actual64, expected64;
+        |  sn_test_f32 actual32, expected32;
+        |  sn_test_f64 x64, y64;
+        |  sn_test_f32 x32, y32;
+        |  unsigned long long state = 0x6a09e667f3bcc909ULL;
+        |  int i;
+        |  for (i = 0; i < 11; ++i) {
+        |    actual64.value = agbc_match_drem(values[i], divisors[i]);
+        |    expected64.value = fmod(values[i], divisors[i]);
+        |    if (actual64.bits != expected64.bits) return 10 + i;
+        |  }
+        |  actual64.value = agbc_match_drem(-4.0, 2.0);
+        |  expected64.value = fmod(-4.0, 2.0);
+        |  if (actual64.bits != expected64.bits) return 20;
+        |  actual64.value = agbc_match_drem(1.0, INFINITY);
+        |  if (actual64.value != 1.0) return 21;
+        |  actual64.value = agbc_match_drem(1.0, 0.0);
+        |  if (!isnan(actual64.value)) return 22;
+        |  actual32.value = agbc_match_frem(-5.3f, 2.0f);
+        |  expected32.value = fmodf(-5.3f, 2.0f);
+        |  if (actual32.bits != expected32.bits) return 23;
+        |  actual32.value = agbc_match_frem(-0.0f, 1.0f);
+        |  expected32.value = fmodf(-0.0f, 1.0f);
+        |  if (actual32.bits != expected32.bits) return 25;
+        |  actual32.value = agbc_match_frem(1.0f, 0.0f);
+        |  if (!isnan(actual32.value)) return 24;
+        |  for (i = 0; i < 4096; ++i) {
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    x64.bits = state;
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    x64.bits = (x64.bits & 0x800fffffffffffffULL) |
+        |      ((state % 2047ULL) << 52);
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    y64.bits = state;
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    y64.bits = (y64.bits & 0x800fffffffffffffULL) |
+        |      ((state % 2047ULL) << 52);
+        |    if ((y64.bits & 0x7fffffffffffffffULL) == 0) y64.bits = 1;
+        |    actual64.value = agbc_match_drem(x64.value, y64.value);
+        |    expected64.value = fmod(x64.value, y64.value);
+        |    if (actual64.bits != expected64.bits) return 30;
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    x32.bits = (unsigned int)state;
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    x32.bits = (x32.bits & 0x807fffffu) |
+        |      ((unsigned int)(state % 255ULL) << 23);
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    y32.bits = (unsigned int)state;
+        |    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        |    y32.bits = (y32.bits & 0x807fffffu) |
+        |      ((unsigned int)(state % 255ULL) << 23);
+        |    if ((y32.bits & 0x7fffffffu) == 0) y32.bits = 1;
+        |    actual32.value = agbc_match_frem(x32.value, y32.value);
+        |    expected32.value = fmodf(x32.value, y32.value);
+        |    if (actual32.bits != expected32.bits) return 31;
+        |  }
+        |  puts("fmod helper semantic checks passed");
+        |  return 0;
+        |}
+        |""".stripMargin
+    val harness = dir.resolve("fmod-harness.c")
+    val executable = dir.resolve("fmod-harness")
+    Files.write(
+      harness,
+      (generated + "\n" + semanticHarness).getBytes(StandardCharsets.UTF_8)
+    )
+    val cCompiler = sys.env.getOrElse("CC", "cc")
+    assertEquals(
+      "host C compiler failed",
+      0,
+      Process(
+        Seq(
+          cCompiler,
+          "-std=c99",
+          "-O2",
+          harness.toString,
+          "-lm",
+          "-o",
+          executable.toString
+        ),
+        dir.toFile
+      ).!
+    )
+    assertEquals(
+      "fmod helper disagrees with the host C library",
+      0,
+      Process(Seq(executable.toString), dir.toFile).!
     )
   }
 
@@ -1773,8 +1886,8 @@ class AgbccCodeGenTest {
     assertTrue(source, source.contains("agbc_scala_bits_float"))
     assertTrue(source, source.contains("agbc_scala_floatrem"))
     assertTrue(source, source.contains("agbc_scala_doublerem"))
-    assertTrue(source, source.contains("fmodf("))
-    assertTrue(source, source.contains("fmod("))
+    assertTrue(source, source.contains("sn_agbcc_fmod32("))
+    assertTrue(source, source.contains("sn_agbcc_fmod64("))
     assertTrue(source, source.contains("union { sn_f32 from; sn_i32 to; }"))
     assertTrue(source, source.contains("union { sn_i32 from; sn_f32 to; }"))
     assertTrue(source, source.contains("Random(void)"))
@@ -1803,58 +1916,58 @@ class AgbccCodeGenTest {
         |typedef unsigned long long sn_u64;
         |typedef float sn_f32;
         |typedef double sn_f64;
-        |extern sn_f32 fmodf(sn_f32, sn_f32);
-        |extern sn_f64 fmod(sn_f64, sn_f64);
-        |extern sn_u32 gRngValue;
-        |extern sn_u32 xlat_random_sRandCount;
-        |extern sn_u8 xlat_random_sUnknown;
-        |sn_i32 Random(void) {
-        |  gRngValue = (sn_u32)(gRngValue * 1103515245u + 24691u);
-        |  xlat_random_sRandCount += 1;
-        |  return (sn_i32)(gRngValue >> 16);
-        |}
-        |void SeedRng(sn_i32 seed) {
-        |  sn_i32 masked = seed & 65535;
-        |  gRngValue = masked;
-        |  xlat_random_sUnknown = 0;
-        |}
-        |sn_i32 agbc_scala_add(sn_i32 a, sn_i32 b) {
-        |  return (sn_i32)((sn_u32)a + (sn_u32)b);
-        |}
-        |sn_f32 agbc_scala_bits_float(sn_i32 value) {
-        |  union { sn_i32 from; sn_f32 to; } bits;
-        |  bits.from = value;
-        |  return bits.to;
-        |}
-        |sn_f64 agbc_scala_doublerem(sn_f64 a, sn_f64 b) {
-        |  return fmod(a, b);
-        |}
-        |sn_i32 agbc_scala_float_bits(sn_f32 value) {
-        |  union { sn_f32 from; sn_i32 to; } bits;
-        |  bits.from = value;
-        |  return bits.to;
-        |}
-        |sn_f32 agbc_scala_floatrem(sn_f32 a, sn_f32 b) {
-        |  return fmodf(a, b);
-        |}
-        |sn_i64 agbc_scala_longadd(sn_i64 a, sn_i64 b) {
-        |  return (sn_i64)((sn_u64)a + (sn_u64)b);
-        |}
-        |sn_i32 agbc_scala_max(sn_i32 a, sn_i32 b) {
-        |  sn_u8 cond = (sn_u8)(a >= b);
-        |  sn_i32 result;
-        |  if (cond) goto take_a; else goto take_b;
-        |take_a: ;
-        |  { sn_i32 edge = a; result = edge; goto done; }
-        |take_b: ;
-        |  { sn_i32 edge = b; result = edge; goto done; }
-        |done: ;
-        |  return result;
-        |}
-        |sn_i32 agbc_scala_muladd(sn_i32 a, sn_i32 b, sn_i32 c) {
-        |  return (sn_i32)((sn_u32)a * (sn_u32)b + (sn_u32)c);
-        |}
-        |""".stripMargin
+        |""".stripMargin + AgbccCodeGen.FloatingRemainderSupport +
+        """
+          |extern sn_u32 gRngValue;
+          |extern sn_u32 xlat_random_sRandCount;
+          |extern sn_u8 xlat_random_sUnknown;
+          |sn_i32 Random(void) {
+          |  gRngValue = (sn_u32)(gRngValue * 1103515245u + 24691u);
+          |  xlat_random_sRandCount += 1;
+          |  return (sn_i32)(gRngValue >> 16);
+          |}
+          |void SeedRng(sn_i32 seed) {
+          |  sn_i32 masked = seed & 65535;
+          |  gRngValue = masked;
+          |  xlat_random_sUnknown = 0;
+          |}
+          |sn_i32 agbc_scala_add(sn_i32 a, sn_i32 b) {
+          |  return (sn_i32)((sn_u32)a + (sn_u32)b);
+          |}
+          |sn_f32 agbc_scala_bits_float(sn_i32 value) {
+          |  union { sn_i32 from; sn_f32 to; } bits;
+          |  bits.from = value;
+          |  return bits.to;
+          |}
+          |sn_f64 agbc_scala_doublerem(sn_f64 a, sn_f64 b) {
+          |  return sn_agbcc_fmod64(a, b);
+          |}
+          |sn_i32 agbc_scala_float_bits(sn_f32 value) {
+          |  union { sn_f32 from; sn_i32 to; } bits;
+          |  bits.from = value;
+          |  return bits.to;
+          |}
+          |sn_f32 agbc_scala_floatrem(sn_f32 a, sn_f32 b) {
+          |  return sn_agbcc_fmod32(a, b);
+          |}
+          |sn_i64 agbc_scala_longadd(sn_i64 a, sn_i64 b) {
+          |  return (sn_i64)((sn_u64)a + (sn_u64)b);
+          |}
+          |sn_i32 agbc_scala_max(sn_i32 a, sn_i32 b) {
+          |  sn_u8 cond = (sn_u8)(a >= b);
+          |  sn_i32 result;
+          |  if (cond) goto take_a; else goto take_b;
+          |take_a: ;
+          |  { sn_i32 edge = a; result = edge; goto done; }
+          |take_b: ;
+          |  { sn_i32 edge = b; result = edge; goto done; }
+          |done: ;
+          |  return result;
+          |}
+          |sn_i32 agbc_scala_muladd(sn_i32 a, sn_i32 b, sn_i32 c) {
+          |  return (sn_i32)((sn_u32)a * (sn_u32)b + (sn_u32)c);
+          |}
+          |""".stripMargin
     val oracleObject = compile(
       oracle,
       "scala-export-oracle",

@@ -19,6 +19,161 @@ private[scalanative] object AgbccCodeGen {
   private final val OutputName = "agbc-module" + SourceExtension
   private val CIdentifier = "[A-Za-z_][A-Za-z0-9_]*".r
 
+  // agbcc's bundled newlib does not include libm. Implement fmod with the
+  // fdlibm shift/subtract algorithm so Frem remains self-contained in ROMs.
+  // ====================================================
+  // Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+  // Developed at SunSoft, a Sun Microsystems, Inc. business.
+  // Permission to use, copy, modify, and distribute this software is freely
+  // granted, provided that this notice is preserved.
+  // ====================================================
+  // The word order is intentionally little-endian; this backend only accepts
+  // the ARMv4T GBA target.
+  private[llvm] val FloatingRemainderSupport =
+    """static sn_f64 sn_agbcc_fmod_invalid(void) {
+      |  union { sn_f64 value; sn_u32 words[2]; } result;
+      |  result.words[0] = 0;
+      |  result.words[1] = 0x7ff80000u;
+      |  return result.value;
+      |}
+      |
+      |static int sn_agbcc_fmod_exponent(sn_u32 high, sn_u32 low) {
+      |  int exponent;
+      |  sn_u32 scan;
+      |  if (high >= 0x00100000u)
+      |    return (int)(high >> 20) - 1023;
+      |  scan = high & 0x000fffffu;
+      |  if (scan != 0) {
+      |    exponent = -1022;
+      |    while ((scan & 0x00100000u) == 0) {
+      |      scan <<= 1;
+      |      exponent -= 1;
+      |    }
+      |  } else {
+      |    exponent = -1043;
+      |    scan = low;
+      |    while ((scan & 0x80000000u) == 0) {
+      |      scan <<= 1;
+      |      exponent -= 1;
+      |    }
+      |  }
+      |  return exponent;
+      |}
+      |
+      |static sn_f64 sn_agbcc_fmod(sn_f64 x, sn_f64 y) {
+      |  union { sn_f64 value; sn_u32 words[2]; } xbits, ybits, result;
+      |  sn_u32 hx, lx, hy, ly, sx, lz;
+      |  sn_i32 hz;
+      |  int ix, iy, n, less;
+      |  xbits.value = x;
+      |  ybits.value = y;
+      |  hx = xbits.words[1];
+      |  lx = xbits.words[0];
+      |  hy = ybits.words[1] & 0x7fffffffu;
+      |  ly = ybits.words[0];
+      |  sx = hx & 0x80000000u;
+      |  hx &= 0x7fffffffu;
+      |  if ((hy | ly) == 0 || hx >= 0x7ff00000u ||
+      |      hy > 0x7ff00000u || (hy == 0x7ff00000u && ly != 0))
+      |    return sn_agbcc_fmod_invalid();
+      |  if (hx < hy || (hx == hy && lx < ly)) return x;
+      |  if (hx == hy && lx == ly) {
+      |    result.words[0] = 0;
+      |    result.words[1] = sx;
+      |    return result.value;
+      |  }
+      |  ix = sn_agbcc_fmod_exponent(hx, lx);
+      |  iy = sn_agbcc_fmod_exponent(hy, ly);
+      |  if (ix >= -1022)
+      |    hx = 0x00100000u | (hx & 0x000fffffu);
+      |  else {
+      |    n = -1022 - ix;
+      |    if (n <= 31) {
+      |      hx = (hx << n) | (lx >> (32 - n));
+      |      lx <<= n;
+      |    } else {
+      |      hx = lx << (n - 32);
+      |      lx = 0;
+      |    }
+      |  }
+      |  if (iy >= -1022)
+      |    hy = 0x00100000u | (hy & 0x000fffffu);
+      |  else {
+      |    n = -1022 - iy;
+      |    if (n <= 31) {
+      |      hy = (hy << n) | (ly >> (32 - n));
+      |      ly <<= n;
+      |    } else {
+      |      hy = ly << (n - 32);
+      |      ly = 0;
+      |    }
+      |  }
+      |  n = ix - iy;
+      |  while (n > 0) {
+      |    less = hx < hy || (hx == hy && lx < ly);
+      |    hz = (sn_i32)hx - (sn_i32)hy;
+      |    lz = lx - ly;
+      |    if (lx < ly) hz -= 1;
+      |    if (less) {
+      |      hx = (hx << 1) | (lx >> 31);
+      |      lx <<= 1;
+      |    } else {
+      |      if (hz == 0 && lz == 0) {
+      |        result.words[0] = 0;
+      |        result.words[1] = sx;
+      |        return result.value;
+      |      }
+      |      hx = (hz << 1) | (lz >> 31);
+      |      lx = lz << 1;
+      |    }
+      |    n -= 1;
+      |  }
+      |  less = hx < hy || (hx == hy && lx < ly);
+      |  hz = (sn_i32)hx - (sn_i32)hy;
+      |  lz = lx - ly;
+      |  if (lx < ly) hz -= 1;
+      |  if (!less) { hx = hz; lx = lz; }
+      |  if ((hx | lx) == 0) {
+      |    result.words[0] = 0;
+      |    result.words[1] = sx;
+      |    return result.value;
+      |  }
+      |  while (hx < 0x00100000u) {
+      |    hx = (hx << 1) | (lx >> 31);
+      |    lx <<= 1;
+      |    iy -= 1;
+      |  }
+      |  if (iy >= -1022) {
+      |    hx = (hx - 0x00100000u) | ((sn_u32)(iy + 1023) << 20);
+      |    result.words[1] = hx | sx;
+      |    result.words[0] = lx;
+      |  } else {
+      |    n = -1022 - iy;
+      |    if (n <= 20) {
+      |      lx = (lx >> n) | (hx << (32 - n));
+      |      hx >>= n;
+      |    } else if (n <= 31) {
+      |      lx = (hx << (32 - n)) | (lx >> n);
+      |      hx = 0;
+      |    } else {
+      |      lx = hx >> (n - 32);
+      |      hx = 0;
+      |    }
+      |    result.words[1] = hx | sx;
+      |    result.words[0] = lx;
+      |  }
+      |  return result.value;
+      |}
+      |
+      |static sn_f64 sn_agbcc_fmod64(sn_f64 x, sn_f64 y) {
+      |  return sn_agbcc_fmod(x, y);
+      |}
+      |
+      |static sn_f32 sn_agbcc_fmod32(sn_f32 x, sn_f32 y) {
+      |  return (sn_f32)sn_agbcc_fmod((sn_f64)x, (sn_f64)y);
+      |}
+      |""".stripMargin
+
   def validateConfig(config: NativeConfig): Unit = {
     if (!config.agbccAbi)
       throw new BuildException("agbcc code generation requires agbccAbi=true")
@@ -280,20 +435,8 @@ private[scalanative] object AgbccCodeGen {
     out.append("typedef unsigned long long sn_u64;\n\n")
     out.append("typedef float sn_f32;\n")
     out.append("typedef double sn_f64;\n\n")
-    floatRemainderTypes
-      .sortBy {
-        case nir.Type.Float  => 0
-        case nir.Type.Double => 1
-        case _               => 2
-      }
-      .foreach {
-        case nir.Type.Float =>
-          out.append("extern sn_f32 fmodf(sn_f32, sn_f32);\n")
-        case nir.Type.Double =>
-          out.append("extern sn_f64 fmod(sn_f64, sn_f64);\n")
-        case _ => ()
-      }
-    if (floatRemainderTypes.nonEmpty) out.append('\n')
+    if (floatRemainderTypes.nonEmpty)
+      out.append(FloatingRemainderSupport).append('\n')
 
     def aggregateName(ty: nir.Type.AggregateKind): String = {
       val bytes = ty.mangle.getBytes(java.nio.charset.StandardCharsets.UTF_8)
@@ -693,7 +836,8 @@ private[scalanative] object AgbccCodeGen {
         }
       case Op.Bin(Bin.Frem, ty, left, right)
           if ty == Type.Float || ty == Type.Double =>
-        val function = if (ty == Type.Float) "fmodf" else "fmod"
+        val function =
+          if (ty == Type.Float) "sn_agbcc_fmod32" else "sn_agbcc_fmod64"
         s"$function(${value(left)}, ${value(right)})"
       case Op.Bin(bin, ty, left, right) if floatingType(ty) =>
         val operator = bin match {
