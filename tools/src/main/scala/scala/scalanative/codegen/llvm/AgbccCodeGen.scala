@@ -355,7 +355,9 @@ private[scalanative] object AgbccCodeGen {
       case Op.Copy(v)             => value(v)
       case Op.Load(ty, ptr, None) =>
         s"(*(${ctype(ty, "load type")} *)(${value(ptr)}))"
-      case Op.Load(_, _, Some(_))    => fail("atomic load")
+      case Op.Load(_, _, Some(_))   => fail("atomic load")
+      case Op.Stackalloc(ty, count) =>
+        s"((void *)__builtin_alloca(sizeof(${ctype(ty, "stack allocation type")}) * (${value(count)})))"
       case Op.Elem(ty, ptr, indexes) =>
         if (indexes.isEmpty) fail("empty element index path")
         def aggregateDeclaration(aggregate: Type, name: String): String =

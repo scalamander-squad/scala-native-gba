@@ -40,8 +40,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
   - An experimental, separate `NativeConfig.withAgbccCodegen(true)` path is being developed to generate code from
     lowered Scala Native NIR through the game's actual agbcc compiler. It is opt-in, GBA-target-only, and requires
     `AGBCC` to point to agbcc; it also disables incremental compilation and LTO. The current emitter handles a
-    deliberately narrow NIR subset (scalar integer and pointer signatures, typed element-address calculations for
-    nested struct/array paths, integer arithmetic/bitwise operations,
+    deliberately narrow NIR subset (scalar integer and pointer signatures, stack allocation, typed element-address
+    calculations for nested struct/array paths, integer arithmetic/bitwise operations,
     non-exceptional signed and unsigned division and remainder, integer comparisons, pointer/reference equality,
     conversions, direct calls, `sizeof`, and simple label/branch/switch control flow). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
@@ -49,8 +49,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
     signatures, arithmetic/bitwise operations, non-exceptional signed and unsigned division and remainder,
-    integer comparisons, pointer/reference equality, shifts and conversions, typed element-address calculations for
-    nested struct/array paths, direct calls, scalar external global
+    integer comparisons, pointer/reference equality, shifts and conversions, stack allocation, typed element-address
+    calculations for nested struct/array paths, direct calls, scalar external global
     loads/stores, `sizeof`, and label/branch/switch control flow. A Scala 3 frontend test sends exported
     `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
     optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C

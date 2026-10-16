@@ -143,6 +143,21 @@ class AgbccCodeGenTest {
         nir.Inst.Ret(nir.Val.Local(nir.Local(84), nir.Type.Ptr))
       )
     )
+    val stackCount = nir.Val.Local(nir.Local(92), nir.Type.Int)
+    val stackalloc = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_stackalloc")),
+      nir.Type.Function(Seq(nir.Type.Int), nir.Type.Ptr),
+      Seq(
+        nir.Inst.Label(nir.Local(91), Seq(stackCount)),
+        nir.Inst.Let(
+          nir.Local(93),
+          nir.Op.Stackalloc(nir.Type.Int, stackCount),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(93), nir.Type.Ptr))
+      )
+    )
     Seq(
       add,
       call,
@@ -150,6 +165,7 @@ class AgbccCodeGenTest {
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
       pointerComparison("agbc_match_ptr_ne", nir.Comp.Ine, 70),
       structElementPointer,
+      stackalloc,
       binary("agbc_match_udiv", nir.Bin.Udiv, 30),
       binary("agbc_match_rem", nir.Bin.Srem, 40),
       binary("agbc_match_urem", nir.Bin.Urem, 50),
@@ -353,6 +369,8 @@ class AgbccCodeGenTest {
         |  return sn_l43;
         |}
         |
+        |/* AGBC_STACKALLOC_ORACLE */
+        |
         |sn_i32 agbc_match_udiv(sn_i32 sn_l31, sn_i32 sn_l32) {
         |  sn_i32 sn_l33;
         |
@@ -377,10 +395,16 @@ class AgbccCodeGenTest {
         |  return &((sn_elem_struct *)base)[index].f1;
         |}""".stripMargin
     )
+    val oracleWithStackalloc = oracleWithElem.replace(
+      "/* AGBC_STACKALLOC_ORACLE */",
+      """void * agbc_match_stackalloc(sn_i32 count) {
+        |  return __builtin_alloca(sizeof(sn_i32) * count);
+        |}""".stripMargin
+    )
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
     val oracleObject =
-      compile(oracleWithElem, "oracle", dir, agbcc.get, assembler.get)
+      compile(oracleWithStackalloc, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
