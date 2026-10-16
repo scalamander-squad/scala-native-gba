@@ -92,6 +92,38 @@ private[scalanative] object AgbccCodeGen {
       case d: nir.Defn.Var   => d.name -> d.ty
       case d: nir.Defn.Const => d.name -> d.ty
     }.toMap
+    val aggregateTypes = mutable.LinkedHashSet.empty[nir.Type.AggregateKind]
+    def noteType(ty: nir.Type): Unit = ty match {
+      case aggregate: nir.Type.AggregateKind =>
+        if (aggregateTypes.add(aggregate))
+          aggregate match {
+            case nir.Type.StructValue(fields)    => fields.foreach(noteType)
+            case nir.Type.ArrayValue(element, _) => noteType(element)
+          }
+      case nir.Type.Function(args, ret) =>
+        args.foreach(noteType)
+        noteType(ret)
+      case nir.Type.Var(element) => noteType(element)
+      case _                     => ()
+    }
+    def noteDefinitionTypes(defn: nir.Defn.Define): Unit = {
+      noteType(defn.ty)
+      defn.insts.foreach {
+        case nir.Inst.Label(_, params) => params.foreach(p => noteType(p.ty))
+        case nir.Inst.Let(_, op, _)    =>
+          noteType(op.resty)
+          op match {
+            case nir.Op.Load(ty, _, _)     => noteType(ty)
+            case nir.Op.Store(ty, _, _, _) => noteType(ty)
+            case nir.Op.Elem(ty, _, _)     => noteType(ty)
+            case nir.Op.Stackalloc(ty, _)  => noteType(ty)
+            case nir.Op.SizeOf(ty)         => noteType(ty)
+            case _                         => ()
+          }
+        case nir.Inst.Ret(value) => noteType(value.ty)
+        case _                   => ()
+      }
+    }
     val dataDefinitions = dataTypes.keySet
     val referencedData = mutable.LinkedHashSet.empty[nir.Global.Member]
 
@@ -154,6 +186,7 @@ private[scalanative] object AgbccCodeGen {
     }
 
     defnLoop(defns, addSignature, definitions, unsupported)
+    definitions.foreach(noteDefinitionTypes)
     definitions.foreach { defn =>
       defn.insts.foreach {
         case nir.Inst.Let(_, nir.Op.Call(ty, nir.Val.Global(g, _), args), _) =>
@@ -177,6 +210,8 @@ private[scalanative] object AgbccCodeGen {
         case _ =>
       }
     }
+    declarations.values.foreach(noteType)
+    referencedData.foreach(global => noteType(dataTypes(global)))
 
     val out = new StringBuilder
     out.append("typedef signed char sn_i8;\n")
@@ -187,23 +222,68 @@ private[scalanative] object AgbccCodeGen {
     out.append("typedef unsigned int sn_u32;\n")
     out.append("typedef signed long long sn_i64;\n")
     out.append("typedef unsigned long long sn_u64;\n\n")
+    out.append("typedef float sn_f32;\n")
+    out.append("typedef double sn_f64;\n\n")
+
+    def aggregateName(ty: nir.Type.AggregateKind): String = {
+      val bytes = ty.mangle.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+      "sn_aggr_" + bytes.map(b => f"${b & 0xff}%02x").mkString
+    }
 
     def ctype(ty: nir.Type, where: String): String = ty match {
-      case nir.Type.Unit                => "void"
-      case nir.Type.Bool                => "sn_u8"
-      case nir.Type.Byte                => "sn_i8"
-      case nir.Type.Char                => "sn_u16"
-      case nir.Type.Short               => "sn_i16"
-      case nir.Type.Int                 => "sn_i32"
-      case nir.Type.Size                => "sn_u32"
-      case nir.Type.Long                => "sn_i64"
-      case nir.Type.Ptr | nir.Type.Null => "void *"
-      case _: nir.Type.RefKind          => "void *"
-      case _                            =>
+      case nir.Type.Unit                     => "void"
+      case nir.Type.Bool                     => "sn_u8"
+      case nir.Type.Byte                     => "sn_i8"
+      case nir.Type.Char                     => "sn_u16"
+      case nir.Type.Short                    => "sn_i16"
+      case nir.Type.Int                      => "sn_i32"
+      case nir.Type.Size                     => "sn_u32"
+      case nir.Type.Long                     => "sn_i64"
+      case nir.Type.Float                    => "sn_f32"
+      case nir.Type.Double                   => "sn_f64"
+      case nir.Type.Ptr | nir.Type.Null      => "void *"
+      case _: nir.Type.RefKind               => "void *"
+      case aggregate: nir.Type.AggregateKind => aggregateName(aggregate)
+      case _                                 =>
         throw new BuildException(
           s"agbcc backend does not support type ${ty.show} in $where"
         )
     }
+
+    def aggregateDepth(ty: nir.Type.AggregateKind): Int = ty match {
+      case nir.Type.StructValue(fields) =>
+        1 + fields
+          .collect { case t: nir.Type.AggregateKind => aggregateDepth(t) }
+          .maxOption
+          .getOrElse(0)
+      case nir.Type.ArrayValue(element: nir.Type.AggregateKind, _) =>
+        1 + aggregateDepth(element)
+      case _: nir.Type.ArrayValue => 1
+    }
+
+    aggregateTypes.toSeq.sortBy(aggregateDepth).foreach {
+      case nir.Type.StructValue(fields) =>
+        val members = fields.zipWithIndex.map {
+          case (field, index) =>
+            s"${ctype(field, "aggregate field")} sn_f$index;"
+        }
+        out
+          .append("typedef struct { ")
+          .append(members.mkString(" "))
+          .append(" } ")
+          .append(aggregateName(nir.Type.StructValue(fields)))
+          .append(";\n")
+      case nir.Type.ArrayValue(element, length) =>
+        out
+          .append("typedef struct { ")
+          .append(ctype(element, "aggregate array element"))
+          .append(" sn_values[")
+          .append(length)
+          .append("]; } ")
+          .append(aggregateName(nir.Type.ArrayValue(element, length)))
+          .append(";\n")
+    }
+    if (aggregateTypes.nonEmpty) out.append('\n')
 
     declarations.toSeq.sortBy(_._1).foreach {
       case (name, ty) =>
@@ -339,6 +419,33 @@ private[scalanative] object AgbccCodeGen {
       case _ => false
     }
 
+    def aggregateAccess(
+        root: String,
+        rootType: nir.Type,
+        indexes: Seq[Int]
+    ): String = {
+      var current = rootType
+      var access = root
+      indexes.foreach { index =>
+        current match {
+          case Type.StructValue(fields)
+              if index >= 0 && index < fields.length =>
+            access = s"($access).sn_f$index"
+            current = fields(index)
+          case Type.ArrayValue(element, length)
+              if index >= 0 && index < length =>
+            access = s"($access).sn_values[$index]"
+            current = element
+          case Type.StructValue(fields) =>
+            fail(s"struct aggregate index $index of ${fields.length}")
+          case Type.ArrayValue(_, length) =>
+            fail(s"array aggregate index $index of $length")
+          case _ => fail(s"aggregate index $index into ${current.show}")
+        }
+      }
+      access
+    }
+
     def pointerType(ty: nir.Type): Boolean = ty match {
       case Type.Ptr | Type.Null | _: Type.Ref | _: Type.Array => true
       case _                                                  => false
@@ -352,7 +459,10 @@ private[scalanative] object AgbccCodeGen {
       }
 
     def expression(op: nir.Op): String = op match {
-      case Op.Copy(v)             => value(v)
+      case Op.Copy(v)                     => value(v)
+      case Op.Extract(aggregate, indexes) =>
+        if (indexes.isEmpty) fail("empty aggregate extraction path")
+        aggregateAccess(value(aggregate), aggregate.ty, indexes)
       case Op.Load(ty, ptr, None) =>
         s"(*(${ctype(ty, "load type")} *)(${value(ptr)}))"
       case Op.Load(_, _, Some(_))   => fail("atomic load")
@@ -553,12 +663,27 @@ private[scalanative] object AgbccCodeGen {
             case _ => fail(s"Unit operation ${op.show}")
           }
         } else {
-          result
-            .append("  ")
-            .append(localName(id))
-            .append(" = ")
-            .append(expression(op))
-            .append(";\n")
+          op match {
+            case Op.Insert(aggregate, stored, indexes) =>
+              if (indexes.isEmpty) fail("empty aggregate insertion path")
+              result
+                .append("  ")
+                .append(localName(id))
+                .append(" = ")
+                .append(value(aggregate))
+                .append(";\n  ")
+                .append(aggregateAccess(localName(id), aggregate.ty, indexes))
+                .append(" = ")
+                .append(value(stored))
+                .append(";\n")
+            case _ =>
+              result
+                .append("  ")
+                .append(localName(id))
+                .append(" = ")
+                .append(expression(op))
+                .append(";\n")
+          }
         }
       case Inst.Ret(v) =>
         result.append("  return")

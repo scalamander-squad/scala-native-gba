@@ -37,13 +37,14 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     match agbcc's instruction selection or register allocation, so it is a stepping stone for ABI-sensitive code and
     not a byte-identical code-generation mode. The profile is off by default; the GBA test ROM accepts
     `AGBCC_ABI=1` to exercise it.
-  - An experimental, separate `NativeConfig.withAgbccCodegen(true)` path is being developed to generate code from
+  - An experimental, separate `NativeConfig.withAgbccCodegen(true)` path generates code from
     lowered Scala Native NIR through the game's actual agbcc compiler. It is opt-in, GBA-target-only, and requires
     `AGBCC` to point to agbcc; it also disables incremental compilation and LTO. The current emitter handles a
-    deliberately narrow NIR subset (scalar integer and pointer signatures, stack allocation, typed element-address
+    deliberately narrow NIR subset (scalar and aggregate-by-value signatures, stack allocation, typed element-address
     calculations for nested struct/array paths, integer arithmetic/bitwise operations,
     non-exceptional signed and unsigned division and remainder, integer comparisons, pointer/reference equality,
-    conversions, direct calls, `sizeof`, and simple label/branch/switch control flow). Unsupported
+    conversions, direct calls, `sizeof`, aggregate extraction and insertion for literal struct/array paths, and simple
+    label/branch/switch control flow). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
@@ -51,14 +52,15 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     signatures, arithmetic/bitwise operations, non-exceptional signed and unsigned division and remainder,
     integer comparisons, pointer/reference equality, shifts and conversions, stack allocation, typed element-address
     calculations for nested struct/array paths, direct calls, scalar external global
-    loads/stores, `sizeof`, and label/branch/switch control flow. A Scala 3 frontend test sends exported
+    loads/stores, by-value aggregate signatures, aggregate extraction/insertion, `sizeof`, and label/branch/switch
+    control flow. A Scala 3 frontend test sends exported
     `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
     optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, struct-field address calculation, 64-bit addition, and branch fixtures. An 8-bit
     unsigned division check also verifies
-    that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; object,
-    aggregate and general runtime lowering, broader NIR coverage, and ROM-level
+    that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general
+    aggregate and runtime lowering, broader NIR coverage, and ROM-level
     byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build
     environments must set `AGBCC` and provide `ARM_AS` or `arm-none-eabi-as`. The parity test is
     `toolsJVM3/Test/testOnly scala.scalanative.codegen.llvm.AgbccCodeGenTest` with `AGBCC`, `ARM_AS`,

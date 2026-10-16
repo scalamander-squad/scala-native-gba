@@ -158,19 +158,100 @@ class AgbccCodeGenTest {
         nir.Inst.Ret(nir.Val.Local(nir.Local(93), nir.Type.Ptr))
       )
     )
+    val pairType = nir.Type.StructValue(Seq(nir.Type.Byte, nir.Type.Int))
+    val pair = nir.Val.Local(nir.Local(102), pairType)
+    val structExtract = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_struct_extract")),
+      nir.Type.Function(Seq(pairType), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(101), Seq(pair)),
+        nir.Inst.Let(
+          nir.Local(103),
+          nir.Op.Extract(pair, Seq(1)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(103), nir.Type.Int))
+      )
+    )
+    val pairInput = nir.Val.Local(nir.Local(112), pairType)
+    val replacement = nir.Val.Local(nir.Local(113), nir.Type.Int)
+    val structInsert = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_struct_insert")),
+      nir.Type.Function(Seq(pairType, nir.Type.Int), pairType),
+      Seq(
+        nir.Inst.Label(nir.Local(111), Seq(pairInput, replacement)),
+        nir.Inst.Let(
+          nir.Local(114),
+          nir.Op.Insert(pairInput, replacement, Seq(1)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(114), pairType))
+      )
+    )
+    val wordsType = nir.Type.ArrayValue(nir.Type.Int, 2)
+    val words = nir.Val.Local(nir.Local(122), wordsType)
+    val arrayExtract = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_array_extract")),
+      nir.Type.Function(Seq(wordsType), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(121), Seq(words)),
+        nir.Inst.Let(
+          nir.Local(123),
+          nir.Op.Extract(words, Seq(1)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(123), nir.Type.Int))
+      )
+    )
+    val wordsInput = nir.Val.Local(nir.Local(132), wordsType)
+    val wordReplacement = nir.Val.Local(nir.Local(133), nir.Type.Int)
+    val arrayInsert = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_array_insert")),
+      nir.Type.Function(Seq(wordsType, nir.Type.Int), wordsType),
+      Seq(
+        nir.Inst.Label(nir.Local(131), Seq(wordsInput, wordReplacement)),
+        nir.Inst.Let(
+          nir.Local(134),
+          nir.Op.Insert(wordsInput, wordReplacement, Seq(1)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(134), wordsType))
+      )
+    )
     Seq(
       add,
+      arrayExtract,
+      arrayInsert,
       call,
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
       pointerComparison("agbc_match_ptr_ne", nir.Comp.Ine, 70),
       structElementPointer,
       stackalloc,
+      structExtract,
+      structInsert,
       binary("agbc_match_udiv", nir.Bin.Udiv, 30),
       binary("agbc_match_rem", nir.Bin.Srem, 40),
       binary("agbc_match_urem", nir.Bin.Urem, 50),
       leafDecl
     )
+  }
+
+  @Test def ignoresAggregateTypesOutsideSelectedDefinitions(): Unit = {
+    val unusedType = nir.Type.ArrayValue(nir.Type.Int, 4)
+    val unused = nir.Defn.Const(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_unused_array")),
+      unusedType,
+      nir.Val.Zero(unusedType)
+    )
+    val source = AgbccCodeGen.emit(Seq(fixture.head), fixture :+ unused)
+    assertFalse(source.contains("sn_values[4]"))
+    assertFalse(source.contains("agbc_unused_array"))
   }
 
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
@@ -307,9 +388,13 @@ class AgbccCodeGenTest {
         |typedef unsigned short sn_u16;
         |typedef signed int sn_i32;
         |typedef unsigned int sn_u32;
+        |typedef struct { sn_i8 f0; sn_i32 f1; } sn_pair;
+        |typedef struct { sn_i32 sn_values[2]; } sn_words;
         |
         |extern sn_i32 agb_match_leaf(sn_i32);
         |extern sn_i32 agbc_match_add(sn_i32, sn_i32);
+        |extern sn_i32 agbc_match_array_extract(sn_words);
+        |extern sn_words agbc_match_array_insert(sn_words, sn_i32);
         |extern sn_i32 agbc_match_call(sn_i32);
         |extern sn_i32 agbc_match_div(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
@@ -318,6 +403,8 @@ class AgbccCodeGenTest {
         |extern sn_u8 agbc_match_ptr_eq(void *, void *);
         |extern sn_u8 agbc_match_ptr_ne(void *, void *);
         |extern void * agbc_match_elem_struct(void *, sn_i32);
+        |extern sn_i32 agbc_match_struct_extract(sn_pair);
+        |extern sn_pair agbc_match_struct_insert(sn_pair, sn_i32);
         |
         |sn_i32 agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2) {
         |  sn_i32 sn_l3;
@@ -326,6 +413,9 @@ class AgbccCodeGenTest {
         |  sn_l3 = ((sn_i32)((sn_u32)(sn_l1) + (sn_u32)(sn_l2)));
         |  return sn_l3;
         |}
+        |
+        |/* AGBC_ARRAY_EXTRACT_ORACLE */
+        |/* AGBC_ARRAY_INSERT_ORACLE */
         |
         |sn_i32 agbc_match_call(sn_i32 sn_l11) {
         |  sn_i32 sn_l12;
@@ -370,6 +460,8 @@ class AgbccCodeGenTest {
         |}
         |
         |/* AGBC_STACKALLOC_ORACLE */
+        |/* AGBC_STRUCT_ORACLE */
+        |/* AGBC_STRUCT_INSERT_ORACLE */
         |
         |sn_i32 agbc_match_udiv(sn_i32 sn_l31, sn_i32 sn_l32) {
         |  sn_i32 sn_l33;
@@ -401,10 +493,38 @@ class AgbccCodeGenTest {
         |  return __builtin_alloca(sizeof(sn_i32) * count);
         |}""".stripMargin
     )
+    val oracleWithStruct = oracleWithStackalloc.replace(
+      "/* AGBC_STRUCT_ORACLE */",
+      """sn_i32 agbc_match_struct_extract(sn_pair value) {
+        |  return value.f1;
+        |}""".stripMargin
+    )
+    val oracleWithStructInsert = oracleWithStruct.replace(
+      "/* AGBC_STRUCT_INSERT_ORACLE */",
+      """sn_pair agbc_match_struct_insert(sn_pair value, sn_i32 replacement) {
+        |  sn_pair result = value;
+        |  result.f1 = replacement;
+        |  return result;
+        |}""".stripMargin
+    )
+    val oracleWithArrayExtract = oracleWithStructInsert.replace(
+      "/* AGBC_ARRAY_EXTRACT_ORACLE */",
+      """sn_i32 agbc_match_array_extract(sn_words value) {
+        |  return value.sn_values[1];
+        |}""".stripMargin
+    )
+    val oracleWithArrayInsert = oracleWithArrayExtract.replace(
+      "/* AGBC_ARRAY_INSERT_ORACLE */",
+      """sn_words agbc_match_array_insert(sn_words value, sn_i32 replacement) {
+        |  sn_words result = value;
+        |  result.sn_values[1] = replacement;
+        |  return result;
+        |}""".stripMargin
+    )
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
     val oracleObject =
-      compile(oracleWithStackalloc, "oracle", dir, agbcc.get, assembler.get)
+      compile(oracleWithArrayInsert, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
