@@ -838,6 +838,8 @@ private[scalanative] object AgbccCodeGen {
                 .append(value(stored))
                 .append(";\n")
             case Op.Store(_, _, _, Some(_)) => fail("atomic store")
+            case Op.Fence(_)                =>
+              result.append("  __asm__ volatile(\"\" ::: \"memory\");\n")
             case Op.Call(_, Val.Global(g: nir.Global.Member, _), args) =>
               result
                 .append("  ")

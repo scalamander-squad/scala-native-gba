@@ -1009,6 +1009,58 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def memoryFenceMatchesIndependentAgbccOracle(): Unit = {
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_fence")),
+      nir.Type.Function(Seq.empty, nir.Type.Unit),
+      Seq(
+        nir.Inst.Label(nir.Local(1200), Seq.empty),
+        nir.Inst.Let(
+          nir.Local(1201),
+          nir.Op.Fence(nir.MemoryOrder.SeqCst),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Unit)
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """void agbc_match_fence(void) {
+        |sn_label_1200: ;
+        |  __asm__ volatile("" ::: "memory");
+        |  return;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for memory fence object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-fence-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
