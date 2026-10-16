@@ -431,14 +431,14 @@ class AgbccCodeGenTest {
     assertFalse(source.contains("agbc_unused_array"))
   }
 
-  @Test def rejectsNonFiniteFloatingConstants(): Unit = {
+  @Test def emitsNonFiniteFloatingConstantsAsRawBits(): Unit = {
     Seq(
-      nir.Val.Float(Float.NaN),
-      nir.Val.Float(Float.PositiveInfinity),
-      nir.Val.Double(Double.NaN),
-      nir.Val.Double(Double.NegativeInfinity)
+      (nir.Val.Float(Float.NaN), "0x7fc00000u"),
+      (nir.Val.Float(Float.PositiveInfinity), "0x7f800000u"),
+      (nir.Val.Double(Double.NaN), "0x7ff8000000000000ULL"),
+      (nir.Val.Double(Double.NegativeInfinity), "0xfff0000000000000ULL")
     ).zipWithIndex.foreach {
-      case (constant, index) =>
+      case ((constant, expectedBits), index) =>
         val result = nir.Local(300 + index * 2)
         val definition = nir.Defn.Define(
           nir.Attrs.None,
@@ -450,16 +450,11 @@ class AgbccCodeGenTest {
             nir.Inst.Ret(nir.Val.Local(result, constant.ty))
           )
         )
-        try {
-          AgbccCodeGen.emit(Seq(definition))
-          fail(s"expected non-finite constant $constant to be rejected")
-        } catch {
-          case error: BuildException =>
-            assertTrue(
-              error.getMessage,
-              error.getMessage.contains("non-finite")
-            )
-        }
+        val generated = AgbccCodeGen.emit(Seq(definition))
+        assertTrue(
+          s"non-finite constant $constant lost its IEEE bits",
+          generated.contains(expectedBits)
+        )
     }
   }
 
@@ -1924,6 +1919,128 @@ class AgbccCodeGenTest {
       "unreachable relocation rows differ",
       relocationRows(readelf.get, oracleObject),
       relocationRows(readelf.get, generatedObject)
+    )
+  }
+
+  @Test def nonFiniteFloatConstantsPreserveRawBits(): Unit = {
+    def constant(
+        name: String,
+        ty: nir.Type,
+        value: nir.Val,
+        id: Int
+    ): nir.Defn.Define =
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq.empty, ty),
+        Seq(
+          nir.Inst.Label(nir.Local(id), Seq.empty),
+          nir.Inst.Ret(value)
+        )
+      )
+
+    val definitions = Seq(
+      constant(
+        "agbc_const_f32_nan",
+        nir.Type.Float,
+        nir.Val.Float(java.lang.Float.intBitsToFloat(0x7fc12345)),
+        2000
+      ),
+      constant(
+        "agbc_const_f64_neg_inf",
+        nir.Type.Double,
+        nir.Val.Double(Double.NegativeInfinity),
+        2010
+      )
+    )
+    val generated = AgbccCodeGen.emit(definitions)
+    val oracle =
+      """typedef signed char sn_i8;
+        |typedef unsigned char sn_u8;
+        |typedef signed short sn_i16;
+        |typedef unsigned short sn_u16;
+        |typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef signed long long sn_i64;
+        |typedef unsigned long long sn_u64;
+        |typedef float sn_f32;
+        |typedef double sn_f64;
+        |
+        |sn_f32 agbc_const_f32_nan(void) {
+        |sn_label_2000: ;
+        |  return ((union { sn_u32 bits; sn_f32 value; }){ .bits = 0x7fc12345u }).value;
+        |}
+        |
+        |sn_f64 agbc_const_f64_neg_inf(void) {
+        |sn_label_2010: ;
+        |  return ((union { sn_u64 bits; sn_f64 value; }){ .bits = 0xfff0000000000000ULL }).value;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for non-finite float parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-non-finite-float-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      "non-finite constant .text bytes differ",
+      Files.readAllBytes(
+        extractSection(objcopy.get, oracleObject, "oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy.get, generatedObject, "generated.text")
+      )
+    )
+    assertEquals(
+      "non-finite constant relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+
+    val harness =
+      """int main(void) {
+        |  union { sn_f32 value; sn_u32 bits; } f32;
+        |  union { sn_f64 value; sn_u64 bits; } f64;
+        |  f32.value = agbc_const_f32_nan();
+        |  f64.value = agbc_const_f64_neg_inf();
+        |  if (f32.bits != 0x7fc12345u) return 1;
+        |  if (f64.bits != 0xfff0000000000000ULL) return 2;
+        |  return 0;
+        |}""".stripMargin
+    val hostSource = dir.resolve("non-finite-float-harness.c")
+    val executable = dir.resolve("non-finite-float-harness")
+    Files.write(
+      hostSource,
+      (generated + "\n" + harness).getBytes(StandardCharsets.UTF_8)
+    )
+    val cCompiler = sys.env.getOrElse("CC", "cc")
+    assertEquals(
+      "host C compiler failed",
+      0,
+      Process(
+        Seq(
+          cCompiler,
+          "-std=c99",
+          "-O2",
+          hostSource.toString,
+          "-o",
+          executable.toString
+        ),
+        dir.toFile
+      ).!
+    )
+    assertEquals(
+      "non-finite constant bits changed",
+      0,
+      Process(Seq(executable.toString), dir.toFile).!
     )
   }
 

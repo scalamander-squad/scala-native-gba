@@ -51,8 +51,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
-    signatures, integer arithmetic/bitwise operations, basic floating arithmetic and finite literals, non-exceptional
-    signed and unsigned integer division and remainder, integer and floating comparisons, pointer/reference equality,
+    signatures, integer arithmetic/bitwise operations, basic floating arithmetic, finite literals and IEEE NaN/infinity,
+    non-exceptional signed and unsigned integer division and remainder, integer and floating comparisons, pointer/reference equality,
     shifts, conversions and same-width float/integer bitcasts, stack allocation, compiler memory fences, ordered scalar atomic loads/stores, typed element-address calculations for nested struct/array paths, direct
     calls, typed indirect calls, C varargs call sites, external scalar/aggregate global references, scalar and aggregate
     loads/stores, by-value aggregate

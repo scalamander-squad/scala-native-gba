@@ -704,11 +704,19 @@ private[scalanative] object AgbccCodeGen {
       case Val.Long(n)                       => s"${n}LL"
       case Val.Float(n)
           if java.lang.Float.isNaN(n) || java.lang.Float.isInfinite(n) =>
-        fail("non-finite float constant")
+        val bits = java.lang.Integer.toUnsignedString(
+          java.lang.Float.floatToRawIntBits(n),
+          16
+        )
+        s"((union { sn_u32 bits; sn_f32 value; }){ .bits = 0x${bits}u }).value"
       case Val.Float(n) => s"${n.toString}f"
       case Val.Double(n)
           if java.lang.Double.isNaN(n) || java.lang.Double.isInfinite(n) =>
-        fail("non-finite double constant")
+        val bits = java.lang.Long.toUnsignedString(
+          java.lang.Double.doubleToRawLongBits(n),
+          16
+        )
+        s"((union { sn_u64 bits; sn_f64 value; }){ .bits = 0x${bits}ULL }).value"
       case Val.Double(n)                                         => n.toString
       case Val.Global(g: nir.Global.Member, _) if dataSymbols(g) =>
         s"((void *)&${cIdentifier(g)})"
