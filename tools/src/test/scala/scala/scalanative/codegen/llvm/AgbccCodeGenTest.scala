@@ -431,6 +431,38 @@ class AgbccCodeGenTest {
     assertFalse(source.contains("agbc_unused_array"))
   }
 
+  @Test def rejectsNonFiniteFloatingConstants(): Unit = {
+    Seq(
+      nir.Val.Float(Float.NaN),
+      nir.Val.Float(Float.PositiveInfinity),
+      nir.Val.Double(Double.NaN),
+      nir.Val.Double(Double.NegativeInfinity)
+    ).zipWithIndex.foreach {
+      case (constant, index) =>
+        val result = nir.Local(300 + index * 2)
+        val definition = nir.Defn.Define(
+          nir.Attrs.None,
+          owner.member(nir.Sig.Extern(s"agbc_non_finite_$index")),
+          nir.Type.Function(Seq.empty, constant.ty),
+          Seq(
+            nir.Inst.Label(nir.Local(299 + index * 2), Seq.empty),
+            nir.Inst.Let(result, nir.Op.Copy(constant), nir.Next.None),
+            nir.Inst.Ret(nir.Val.Local(result, constant.ty))
+          )
+        )
+        try {
+          AgbccCodeGen.emit(Seq(definition))
+          fail(s"expected non-finite constant $constant to be rejected")
+        } catch {
+          case error: BuildException =>
+            assertTrue(
+              error.getMessage,
+              error.getMessage.contains("non-finite")
+            )
+        }
+    }
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
