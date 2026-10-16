@@ -222,10 +222,25 @@ class AgbccCodeGenTest {
         nir.Inst.Ret(nir.Val.Local(nir.Local(134), wordsType))
       )
     )
+    val arrayZero = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_array_zero")),
+      nir.Type.Function(Seq.empty, wordsType),
+      Seq(
+        nir.Inst.Label(nir.Local(141), Seq.empty),
+        nir.Inst.Let(
+          nir.Local(142),
+          nir.Op.Copy(nir.Val.Zero(wordsType)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(142), wordsType))
+      )
+    )
     Seq(
       add,
       arrayExtract,
       arrayInsert,
+      arrayZero,
       call,
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
@@ -395,6 +410,7 @@ class AgbccCodeGenTest {
         |extern sn_i32 agbc_match_add(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_array_extract(sn_words);
         |extern sn_words agbc_match_array_insert(sn_words, sn_i32);
+        |extern sn_words agbc_match_array_zero(void);
         |extern sn_i32 agbc_match_call(sn_i32);
         |extern sn_i32 agbc_match_div(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
@@ -416,6 +432,7 @@ class AgbccCodeGenTest {
         |
         |/* AGBC_ARRAY_EXTRACT_ORACLE */
         |/* AGBC_ARRAY_INSERT_ORACLE */
+        |/* AGBC_ARRAY_ZERO_ORACLE */
         |
         |sn_i32 agbc_match_call(sn_i32 sn_l11) {
         |  sn_i32 sn_l12;
@@ -521,10 +538,20 @@ class AgbccCodeGenTest {
         |  return result;
         |}""".stripMargin
     )
+    val oracleWithArrayZero = oracleWithArrayInsert.replace(
+      "/* AGBC_ARRAY_ZERO_ORACLE */",
+      """sn_words agbc_match_array_zero(void) {
+        |  sn_words sn_l142;
+        |
+        |sn_label_141: ;
+        |  sn_l142 = ((sn_words){0});
+        |  return sn_l142;
+        |}""".stripMargin
+    )
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
     val oracleObject =
-      compile(oracleWithArrayInsert, "oracle", dir, agbcc.get, assembler.get)
+      compile(oracleWithArrayZero, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")

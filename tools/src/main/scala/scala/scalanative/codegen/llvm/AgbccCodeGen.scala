@@ -393,10 +393,12 @@ private[scalanative] object AgbccCodeGen {
         if (!localTypes.get(id).exists(_ == ty))
           fail(s"unknown or mistyped local ${id.id}")
         localName(id)
-      case Val.True                          => "1"
-      case Val.False                         => "0"
-      case Val.Null                          => "((void *)0)"
-      case Val.Zero(Type.Ptr)                => "((void *)0)"
+      case Val.True                         => "1"
+      case Val.False                        => "0"
+      case Val.Null                         => "((void *)0)"
+      case Val.Zero(Type.Ptr)               => "((void *)0)"
+      case Val.Zero(ty: Type.AggregateKind) =>
+        s"((${ctype(ty, "zero aggregate")}){0})"
       case Val.Zero(_)                       => "0"
       case Val.Byte(n)                       => n.toString
       case Val.Short(n)                      => n.toString
