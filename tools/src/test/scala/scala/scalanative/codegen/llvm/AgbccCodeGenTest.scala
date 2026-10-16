@@ -1343,6 +1343,234 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def integerExtensionsPreserveNirSignedness(): Unit = {
+    val cases = Seq(
+      (
+        "agbc_conv_zext_byte_int",
+        nir.Type.Byte,
+        nir.Type.Int,
+        nir.Conv.Zext,
+        1700,
+        "sn_i8",
+        "sn_i32",
+        "sn_u8"
+      ),
+      (
+        "agbc_conv_zext_short_long",
+        nir.Type.Short,
+        nir.Type.Long,
+        nir.Conv.Zext,
+        1710,
+        "sn_i16",
+        "sn_i64",
+        "sn_u16"
+      ),
+      (
+        "agbc_conv_sext_byte_int",
+        nir.Type.Byte,
+        nir.Type.Int,
+        nir.Conv.Sext,
+        1720,
+        "sn_i8",
+        "sn_i32",
+        "sn_i8"
+      ),
+      (
+        "agbc_conv_sext_char_int",
+        nir.Type.Char,
+        nir.Type.Int,
+        nir.Conv.Sext,
+        1730,
+        "sn_u16",
+        "sn_i32",
+        "sn_i16"
+      ),
+      (
+        "agbc_conv_zsize_byte_size",
+        nir.Type.Byte,
+        nir.Type.Size,
+        nir.Conv.ZSizeCast,
+        1740,
+        "sn_i8",
+        "sn_u32",
+        "sn_u8"
+      ),
+      (
+        "agbc_conv_ssize_byte_size",
+        nir.Type.Byte,
+        nir.Type.Size,
+        nir.Conv.SSizeCast,
+        1750,
+        "sn_i8",
+        "sn_u32",
+        "sn_i8"
+      ),
+      (
+        "agbc_conv_zsize_size_long",
+        nir.Type.Size,
+        nir.Type.Long,
+        nir.Conv.ZSizeCast,
+        1760,
+        "sn_u32",
+        "sn_i64",
+        "sn_u32"
+      ),
+      (
+        "agbc_conv_ssize_size_long",
+        nir.Type.Size,
+        nir.Type.Long,
+        nir.Conv.SSizeCast,
+        1770,
+        "sn_u32",
+        "sn_i64",
+        "sn_i32"
+      ),
+      (
+        "agbc_conv_zext_int_long",
+        nir.Type.Int,
+        nir.Type.Long,
+        nir.Conv.Zext,
+        1780,
+        "sn_i32",
+        "sn_i64",
+        "sn_u32"
+      ),
+      (
+        "agbc_conv_sext_int_long",
+        nir.Type.Int,
+        nir.Type.Long,
+        nir.Conv.Sext,
+        1790,
+        "sn_i32",
+        "sn_i64",
+        "sn_i32"
+      )
+    )
+    val definitions = cases.map {
+      case (name, fromTy, toTy, conv, id, _, _, _) =>
+        val arg = nir.Val.Local(nir.Local(id + 1), fromTy)
+        nir.Defn.Define(
+          nir.Attrs.None,
+          owner.member(nir.Sig.Extern(name)),
+          nir.Type.Function(Seq(fromTy), toTy),
+          Seq(
+            nir.Inst.Label(nir.Local(id), Seq(arg)),
+            nir.Inst.Let(
+              nir.Local(id + 2),
+              nir.Op.Conv(conv, toTy, arg),
+              nir.Next.None
+            ),
+            nir.Inst.Ret(nir.Val.Local(nir.Local(id + 2), toTy))
+          )
+        )
+    }
+    val generated = AgbccCodeGen.emit(definitions)
+    val oracleFunctions = cases.sortBy(_._1).map {
+      case (name, _, _, _, id, fromC, toC, sourceCastC) =>
+        val source = s"sn_l${id + 1}"
+        val result = s"sn_l${id + 2}"
+        s"""$toC $name($fromC $source) {
+           |  $toC $result;
+           |
+           |sn_label_$id: ;
+           |  $result = (($toC)(($sourceCastC)($source)));
+           |  return $result;
+           |}""".stripMargin
+    }
+    val oracle =
+      """typedef signed char sn_i8;
+        |typedef unsigned char sn_u8;
+        |typedef signed short sn_i16;
+        |typedef unsigned short sn_u16;
+        |typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef signed long long sn_i64;
+        |typedef unsigned long long sn_u64;
+        |""".stripMargin + oracleFunctions.mkString("\n\n")
+
+    assertTrue(
+      generated.contains("((sn_i32)((sn_u8)(sn_l1701)))")
+    )
+    assertTrue(
+      generated.contains("((sn_i32)((sn_i16)(sn_l1731)))")
+    )
+    assertTrue(
+      generated.contains("((sn_i64)((sn_i32)(sn_l1771)))")
+    )
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for integer extension object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-integer-extension-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      "integer conversion .text bytes differ",
+      Files.readAllBytes(
+        extractSection(objcopy.get, oracleObject, "oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy.get, generatedObject, "generated.text")
+      )
+    )
+    assertEquals(
+      "integer conversion relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+
+    val harness =
+      """int main(void) {
+        |  if (agbc_conv_zext_byte_int((sn_i8)-1) != 255) return 1;
+        |  if (agbc_conv_zext_short_long((sn_i16)-1) != 65535) return 2;
+        |  if (agbc_conv_sext_byte_int((sn_i8)0xff) != -1) return 3;
+        |  if (agbc_conv_sext_char_int((sn_u16)0xffff) != -1) return 4;
+        |  if (agbc_conv_zsize_byte_size((sn_i8)-1) != 255u) return 5;
+        |  if (agbc_conv_ssize_byte_size((sn_i8)-1) != 0xffffffffu) return 6;
+        |  if (agbc_conv_zsize_size_long(0xffffffffu) != 4294967295LL) return 7;
+        |  if (agbc_conv_ssize_size_long(0xffffffffu) != -1) return 8;
+        |  if (agbc_conv_zext_int_long(-1) != 4294967295LL) return 9;
+        |  if (agbc_conv_sext_int_long(-1) != -1) return 10;
+        |  return 0;
+        |}
+        |""".stripMargin
+    val hostSource = dir.resolve("conversion-harness.c")
+    val executable = dir.resolve("conversion-harness")
+    Files.write(
+      hostSource,
+      (generated + "\n" + harness).getBytes(StandardCharsets.UTF_8)
+    )
+    val cCompiler = sys.env.getOrElse("CC", "cc")
+    assertEquals(
+      "host C compiler failed",
+      0,
+      Process(
+        Seq(
+          cCompiler,
+          "-std=c99",
+          "-O2",
+          hostSource.toString,
+          "-o",
+          executable.toString
+        ),
+        dir.toFile
+      ).!
+    )
+    assertEquals(
+      "integer extension helper semantics are incorrect",
+      0,
+      Process(Seq(executable.toString), dir.toFile).!
+    )
+  }
+
   @Test def integerDivisionAndRemainderAreEmittedAndDefaultConfigStaysLlvm()
       : Unit = {
     val base = NativeConfig.empty

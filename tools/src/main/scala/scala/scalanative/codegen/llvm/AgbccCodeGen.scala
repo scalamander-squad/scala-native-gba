@@ -617,6 +617,15 @@ private[scalanative] object AgbccCodeGen {
     case _                              => None
   }
 
+  private def integerCType(ty: nir.Type, signed: Boolean): Option[String] =
+    integerWidth(ty).flatMap {
+      case 8  => Some(if (signed) "sn_i8" else "sn_u8")
+      case 16 => Some(if (signed) "sn_i16" else "sn_u16")
+      case 32 => Some(if (signed) "sn_i32" else "sn_u32")
+      case 64 => Some(if (signed) "sn_i64" else "sn_u64")
+      case _  => None
+    }
+
   private def atomicScalar(ty: nir.Type): Boolean = ty match {
     case nir.Type.Bool | nir.Type.Byte | nir.Type.Short | nir.Type.Char |
         nir.Type.Int | nir.Type.Size | nir.Type.Ptr | nir.Type.Null |
@@ -904,8 +913,26 @@ private[scalanative] object AgbccCodeGen {
       case Op.Conv(conv, ty, v)
           if integerType(ty) || ty == Type.Ptr || floatingType(ty) =>
         conv match {
-          case Conv.Trunc | Conv.Zext | Conv.Sext | Conv.Bitcast |
-              Conv.Ptrtoint | Conv.Inttoptr | Conv.ZSizeCast | Conv.SSizeCast |
+          case Conv.Zext | Conv.Sext | Conv.ZSizeCast | Conv.SSizeCast =>
+            val fromWidth = integerWidth(v.ty)
+            val toWidth = integerWidth(ty)
+            val shouldExtend = conv match {
+              case Conv.Zext | Conv.Sext           => true
+              case Conv.ZSizeCast | Conv.SSizeCast =>
+                (for {
+                  from <- fromWidth
+                  to <- toWidth
+                } yield from < to).getOrElse(false)
+              case _ => false
+            }
+            if (shouldExtend) {
+              val signed = conv == Conv.Sext || conv == Conv.SSizeCast
+              val sourceCType = integerCType(v.ty, signed).getOrElse(
+                fail(s"${conv.show} source type ${v.ty.show}")
+              )
+              s"((${ctype(ty, "conversion")})(($sourceCType)(${value(v)})))"
+            } else s"((${ctype(ty, "conversion")})(${value(v)}))"
+          case Conv.Trunc | Conv.Bitcast | Conv.Ptrtoint | Conv.Inttoptr |
               Conv.Fptrunc | Conv.Fpext | Conv.Fptoui | Conv.Fptosi |
               Conv.Uitofp | Conv.Sitofp =>
             s"((${ctype(ty, "conversion")})(${value(v)}))"
