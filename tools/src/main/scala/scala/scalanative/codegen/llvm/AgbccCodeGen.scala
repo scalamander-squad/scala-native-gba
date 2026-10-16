@@ -557,7 +557,13 @@ private[scalanative] object AgbccCodeGen {
           if (ty == Type.Long) "sn_u64" else "sn_u32"
         } else if (ty == Type.Long) "sn_i64"
         else "sn_i32"
-        s"((sn_u8)((($cast)(${value(left)})) $operator (($cast)(${value(right)}))))"
+        val leftValue =
+          if (isUnsigned) unsignedValue(value(left), ty, cast)
+          else s"($cast)(${value(left)})"
+        val rightValue =
+          if (isUnsigned) unsignedValue(value(right), ty, cast)
+          else s"($cast)(${value(right)})"
+        s"((sn_u8)(($leftValue) $operator ($rightValue)))"
       case Op.Comp(comp, ty, left, right) if pointerType(ty) =>
         val operator = comp match {
           case Comp.Ieq => "=="

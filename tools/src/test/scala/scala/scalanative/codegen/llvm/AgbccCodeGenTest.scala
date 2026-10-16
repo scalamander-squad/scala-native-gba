@@ -123,6 +123,31 @@ class AgbccCodeGenTest {
         )
       )
     }
+    def integerComparison(
+        name: String,
+        comp: nir.Comp,
+        ty: nir.Type,
+        id: Int
+    ): nir.Defn.Define = {
+      val args = Seq(
+        nir.Val.Local(nir.Local(id + 1), ty),
+        nir.Val.Local(nir.Local(id + 2), ty)
+      )
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(ty, ty), nir.Type.Bool),
+        Seq(
+          nir.Inst.Label(nir.Local(id), args),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Comp(comp, ty, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Bool))
+        )
+      )
+    }
     val base = nir.Val.Local(nir.Local(82), nir.Type.Ptr)
     val index = nir.Val.Local(nir.Local(83), nir.Type.Int)
     val structElementPointer = nir.Defn.Define(
@@ -243,6 +268,8 @@ class AgbccCodeGenTest {
       arrayZero,
       call,
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
+      integerComparison("agbc_match_ule16", nir.Comp.Ule, nir.Type.Short, 150),
+      integerComparison("agbc_match_ult8", nir.Comp.Ult, nir.Type.Byte, 160),
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
       pointerComparison("agbc_match_ptr_ne", nir.Comp.Ine, 70),
       structElementPointer,
@@ -416,6 +443,8 @@ class AgbccCodeGenTest {
         |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_rem(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_urem(sn_i32, sn_i32);
+        |extern sn_u8 agbc_match_ule16(sn_i16, sn_i16);
+        |extern sn_u8 agbc_match_ult8(sn_i8, sn_i8);
         |extern sn_u8 agbc_match_ptr_eq(void *, void *);
         |extern sn_u8 agbc_match_ptr_ne(void *, void *);
         |extern void * agbc_match_elem_struct(void *, sn_i32);
@@ -488,6 +517,9 @@ class AgbccCodeGenTest {
         |  return sn_l33;
         |}
         |
+        |/* AGBC_ULE16_ORACLE */
+        |/* AGBC_ULT8_ORACLE */
+        |
         |sn_i32 agbc_match_urem(sn_i32 sn_l51, sn_i32 sn_l52) {
         |  sn_i32 sn_l53;
         |
@@ -495,6 +527,7 @@ class AgbccCodeGenTest {
         |  sn_l53 = ((sn_u32)(sn_l51) % (sn_u32)(sn_l52));
         |  return sn_l53;
         |}
+        |
         |""".stripMargin
 
     val oracleWithElem = oracle.replace(
@@ -548,10 +581,30 @@ class AgbccCodeGenTest {
         |  return sn_l142;
         |}""".stripMargin
     )
+    val oracleWithUle16 = oracleWithArrayZero.replace(
+      "/* AGBC_ULE16_ORACLE */",
+      """sn_u8 agbc_match_ule16(sn_i16 sn_l151, sn_i16 sn_l152) {
+        |  sn_u8 sn_l153;
+        |
+        |sn_label_150: ;
+        |  sn_l153 = ((sn_u8)(((sn_u32)(sn_u16)(sn_l151)) <= ((sn_u32)(sn_u16)(sn_l152))));
+        |  return sn_l153;
+        |}""".stripMargin
+    )
+    val oracleWithUlt8 = oracleWithUle16.replace(
+      "/* AGBC_ULT8_ORACLE */",
+      """sn_u8 agbc_match_ult8(sn_i8 sn_l161, sn_i8 sn_l162) {
+        |  sn_u8 sn_l163;
+        |
+        |sn_label_160: ;
+        |  sn_l163 = ((sn_u8)(((sn_u32)(sn_u8)(sn_l161)) < ((sn_u32)(sn_u8)(sn_l162))));
+        |  return sn_l163;
+        |}""".stripMargin
+    )
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
     val oracleObject =
-      compile(oracleWithArrayZero, "oracle", dir, agbcc.get, assembler.get)
+      compile(oracleWithUlt8, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
