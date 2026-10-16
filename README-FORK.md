@@ -63,7 +63,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,
-    aggregate loads/stores and zero initialization, indirect and variadic calls, and branch fixtures. Variadic function
+    aggregate loads/stores and zero initialization, indirect and variadic calls, bitwise logic, all shift variants,
+    signed/unsigned comparisons, and branch fixtures. Variadic function
     definitions are still rejected. An 8-bit unsigned division check also verifies
     that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general
     aggregate and runtime lowering, broader NIR coverage, and ROM-level

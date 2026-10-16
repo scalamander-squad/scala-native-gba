@@ -684,6 +684,152 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def integerBitwiseShiftsAndComparisonsMatchAgbccOracle(): Unit = {
+    def binary(name: String, bin: nir.Bin, id: Int): nir.Defn.Define = {
+      val left = nir.Val.Local(nir.Local(id + 1), nir.Type.Int)
+      val right = nir.Val.Local(nir.Local(id + 2), nir.Type.Int)
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(nir.Type.Int, nir.Type.Int), nir.Type.Int),
+        Seq(
+          nir.Inst.Label(nir.Local(id), Seq(left, right)),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Bin(bin, nir.Type.Int, left, right),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Int))
+        )
+      )
+    }
+    def comparison(name: String, comp: nir.Comp, id: Int): nir.Defn.Define = {
+      val left = nir.Val.Local(nir.Local(id + 1), nir.Type.Int)
+      val right = nir.Val.Local(nir.Local(id + 2), nir.Type.Int)
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(nir.Type.Int, nir.Type.Int), nir.Type.Bool),
+        Seq(
+          nir.Inst.Label(nir.Local(id), Seq(left, right)),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Comp(comp, nir.Type.Int, left, right),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Bool))
+        )
+      )
+    }
+    val definitions = Seq(
+      comparison("agbc_match_a_cmp_sgt", nir.Comp.Sgt, 600),
+      comparison("agbc_match_a_cmp_ule", nir.Comp.Ule, 610),
+      binary("agbc_match_bit_and", nir.Bin.And, 620),
+      binary("agbc_match_bit_or", nir.Bin.Or, 630),
+      binary("agbc_match_bit_xor", nir.Bin.Xor, 640),
+      binary("agbc_match_shift_ashr", nir.Bin.Ashr, 650),
+      binary("agbc_match_shift_lshr", nir.Bin.Lshr, 660),
+      binary("agbc_match_shift_shl", nir.Bin.Shl, 670)
+    )
+    val generated = AgbccCodeGen.emit(definitions)
+    val oracle =
+      """typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef unsigned char sn_u8;
+        |
+        |sn_u8 agbc_match_a_cmp_sgt(sn_i32 sn_l601, sn_i32 sn_l602) {
+        |  sn_u8 sn_l603;
+        |
+        |sn_label_600: ;
+        |  sn_l603 = ((sn_u8)(((sn_i32)(sn_l601)) > ((sn_i32)(sn_l602))));
+        |  return sn_l603;
+        |}
+        |
+        |sn_u8 agbc_match_a_cmp_ule(sn_i32 sn_l611, sn_i32 sn_l612) {
+        |  sn_u8 sn_l613;
+        |
+        |sn_label_610: ;
+        |  sn_l613 = ((sn_u8)(((sn_u32)(sn_l611)) <= ((sn_u32)(sn_l612))));
+        |  return sn_l613;
+        |}
+        |
+        |sn_i32 agbc_match_bit_and(sn_i32 sn_l621, sn_i32 sn_l622) {
+        |  sn_i32 sn_l623;
+        |
+        |sn_label_620: ;
+        |  sn_l623 = (sn_l621 & sn_l622);
+        |  return sn_l623;
+        |}
+        |
+        |sn_i32 agbc_match_bit_or(sn_i32 sn_l631, sn_i32 sn_l632) {
+        |  sn_i32 sn_l633;
+        |
+        |sn_label_630: ;
+        |  sn_l633 = (sn_l631 | sn_l632);
+        |  return sn_l633;
+        |}
+        |
+        |sn_i32 agbc_match_bit_xor(sn_i32 sn_l641, sn_i32 sn_l642) {
+        |  sn_i32 sn_l643;
+        |
+        |sn_label_640: ;
+        |  sn_l643 = (sn_l641 ^ sn_l642);
+        |  return sn_l643;
+        |}
+        |
+        |sn_i32 agbc_match_shift_ashr(sn_i32 sn_l651, sn_i32 sn_l652) {
+        |  sn_i32 sn_l653;
+        |
+        |sn_label_650: ;
+        |  sn_l653 = ((sn_i32)(sn_l651) >> (sn_l652));
+        |  return sn_l653;
+        |}
+        |
+        |sn_i32 agbc_match_shift_lshr(sn_i32 sn_l661, sn_i32 sn_l662) {
+        |  sn_i32 sn_l663;
+        |
+        |sn_label_660: ;
+        |  sn_l663 = ((sn_u32)(sn_l661) >> (sn_l662));
+        |  return sn_l663;
+        |}
+        |
+        |sn_i32 agbc_match_shift_shl(sn_i32 sn_l671, sn_i32 sn_l672) {
+        |  sn_i32 sn_l673;
+        |
+        |sn_label_670: ;
+        |  sn_l673 = ((sn_u32)(sn_l671) << (sn_l672));
+        |  return sn_l673;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for integer object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-integer-ops-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
