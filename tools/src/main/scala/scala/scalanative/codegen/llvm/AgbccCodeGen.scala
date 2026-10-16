@@ -199,6 +199,16 @@ private[scalanative] object AgbccCodeGen {
 
     defnLoop(defns, addSignature, definitions, unsupported)
     definitions.foreach(noteDefinitionTypes)
+    val floatRemainderTypes = definitions
+      .flatMap(_.insts.collect {
+        case nir.Inst.Let(
+              _,
+              nir.Op.Bin(nir.Bin.Frem, ty, _, _),
+              _
+            ) if ty == nir.Type.Float || ty == nir.Type.Double =>
+          ty
+      })
+      .distinct
     definitions.foreach { defn =>
       defn.insts.foreach {
         case nir.Inst.Let(_, nir.Op.Call(ty, nir.Val.Global(g, _), args), _) =>
@@ -270,6 +280,20 @@ private[scalanative] object AgbccCodeGen {
     out.append("typedef unsigned long long sn_u64;\n\n")
     out.append("typedef float sn_f32;\n")
     out.append("typedef double sn_f64;\n\n")
+    floatRemainderTypes
+      .sortBy {
+        case nir.Type.Float  => 0
+        case nir.Type.Double => 1
+        case _               => 2
+      }
+      .foreach {
+        case nir.Type.Float =>
+          out.append("extern sn_f32 fmodf(sn_f32, sn_f32);\n")
+        case nir.Type.Double =>
+          out.append("extern sn_f64 fmod(sn_f64, sn_f64);\n")
+        case _ => ()
+      }
+    if (floatRemainderTypes.nonEmpty) out.append('\n')
 
     def aggregateName(ty: nir.Type.AggregateKind): String = {
       val bytes = ty.mangle.getBytes(java.nio.charset.StandardCharsets.UTF_8)
@@ -667,6 +691,10 @@ private[scalanative] object AgbccCodeGen {
           case Bin.Ashr if !unsigned => s"(($signedC)($l) >> ($r))"
           case _                     => fail(s"binary operation ${bin.show}")
         }
+      case Op.Bin(Bin.Frem, ty, left, right)
+          if ty == Type.Float || ty == Type.Double =>
+        val function = if (ty == Type.Float) "fmodf" else "fmod"
+        s"$function(${value(left)}, ${value(right)})"
       case Op.Bin(bin, ty, left, right) if floatingType(ty) =>
         val operator = bin match {
           case Bin.Fadd => "+"

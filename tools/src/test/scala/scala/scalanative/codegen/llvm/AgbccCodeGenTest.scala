@@ -1127,6 +1127,85 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def floatingRemainderCallsMatchIndependentAgbccOracle(): Unit = {
+    def remainder(
+        name: String,
+        ty: nir.Type,
+        entryId: Int
+    ): nir.Defn.Define = {
+      val args = Seq(
+        nir.Val.Local(nir.Local(entryId + 1), ty),
+        nir.Val.Local(nir.Local(entryId + 2), ty)
+      )
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(ty, ty), ty),
+        Seq(
+          nir.Inst.Label(nir.Local(entryId), args),
+          nir.Inst.Let(
+            nir.Local(entryId + 3),
+            nir.Op.Bin(nir.Bin.Frem, ty, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(entryId + 3), ty))
+        )
+      )
+    }
+    val definitions = Seq(
+      remainder("agbc_match_frem", nir.Type.Float, 1400),
+      remainder("agbc_match_drem", nir.Type.Double, 1410)
+    )
+    val generated = AgbccCodeGen.emit(definitions)
+    val oracle =
+      """typedef float sn_f32;
+        |typedef double sn_f64;
+        |extern sn_f32 fmodf(sn_f32, sn_f32);
+        |extern sn_f64 fmod(sn_f64, sn_f64);
+        |sn_f64 agbc_match_drem(sn_f64 sn_l1411, sn_f64 sn_l1412) {
+        |  sn_f64 sn_l1413;
+        |
+        |sn_label_1410: ;
+        |  sn_l1413 = fmod(sn_l1411, sn_l1412);
+        |  return sn_l1413;
+        |}
+        |sn_f32 agbc_match_frem(sn_f32 sn_l1401, sn_f32 sn_l1402) {
+        |  sn_f32 sn_l1403;
+        |
+        |sn_label_1400: ;
+        |  sn_l1403 = fmodf(sn_l1401, sn_l1402);
+        |  return sn_l1403;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for floating remainder object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-frem-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))

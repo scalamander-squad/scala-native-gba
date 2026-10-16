@@ -51,7 +51,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
-    signatures, integer arithmetic/bitwise operations, basic floating arithmetic and finite literals, non-exceptional
+    signatures, integer arithmetic/bitwise operations, basic floating arithmetic/remainder and finite literals, non-exceptional
     signed and unsigned integer division and remainder, integer and floating comparisons, pointer/reference equality,
     shifts, conversions and same-width float/integer bitcasts, stack allocation, compiler memory fences, ordered scalar atomic loads/stores, typed element-address calculations for nested struct/array paths, direct
     calls, typed indirect calls, C varargs call sites, external scalar/aggregate global references, scalar and aggregate
@@ -63,7 +63,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,
-    aggregate loads/stores and zero initialization, indirect and variadic calls, bitwise logic, all shift variants,
+    aggregate loads/stores and zero initialization, indirect and variadic calls, float/double remainder calls, bitwise logic, all shift variants,
     32-bit float/integer and 64-bit double/long bitcasts, compiler fences, and scalar atomic access,
     signed/unsigned comparisons, and branch fixtures. Variadic function
     definitions are still rejected. Atomic loads/stores are limited to scalar types no wider than 32 bits; acquire/release
