@@ -450,6 +450,14 @@ private[scalanative] object AgbccCodeGen {
     case _                              => None
   }
 
+  private def atomicScalar(ty: nir.Type): Boolean = ty match {
+    case nir.Type.Bool | nir.Type.Byte | nir.Type.Short | nir.Type.Char |
+        nir.Type.Int | nir.Type.Size | nir.Type.Ptr | nir.Type.Null |
+        _: nir.Type.RefKind =>
+      true
+    case _ => false
+  }
+
   private def emitDefinition(
       defn: nir.Defn.Define,
       symbol: nir.Global => String,
@@ -790,6 +798,9 @@ private[scalanative] object AgbccCodeGen {
 
     val args = entry.params.map(p => localName(p.id))
     val result = new StringBuilder
+    def compilerBarrier(): Unit =
+      result.append("  __asm__ volatile(\"\" ::: \"memory\");\n")
+
     val functionHead =
       s"${ctype(defn.ty.ret, "function return")} ${symbol(defn.name)}(${if (args.isEmpty) "void"
         else
@@ -837,8 +848,26 @@ private[scalanative] object AgbccCodeGen {
                 .append(") = ")
                 .append(value(stored))
                 .append(";\n")
-            case Op.Store(_, _, _, Some(_)) => fail("atomic store")
-            case Op.Fence(_)                =>
+            case Op.Store(ty, ptr, stored, Some(order)) =>
+              if (!atomicScalar(ty))
+                fail(s"atomic store of unsupported type ${ty.show}")
+              order match {
+                case nir.MemoryOrder.Acquire | nir.MemoryOrder.AcqRel =>
+                  fail(s"invalid atomic store order ${order.show}")
+                case nir.MemoryOrder.Release | nir.MemoryOrder.SeqCst =>
+                  compilerBarrier()
+                case _ => ()
+              }
+              result
+                .append("  *(volatile ")
+                .append(ctype(ty, "atomic store type"))
+                .append(" *)(")
+                .append(value(ptr))
+                .append(") = ")
+                .append(value(stored))
+                .append(";\n")
+              if (order == nir.MemoryOrder.SeqCst) compilerBarrier()
+            case Op.Fence(_) =>
               result.append("  __asm__ volatile(\"\" ::: \"memory\");\n")
             case Op.Call(_, Val.Global(g: nir.Global.Member, _), args) =>
               result
@@ -853,6 +882,28 @@ private[scalanative] object AgbccCodeGen {
           }
         } else {
           op match {
+            case Op.Load(ty, ptr, Some(order)) =>
+              if (!atomicScalar(ty))
+                fail(s"atomic load of unsupported type ${ty.show}")
+              order match {
+                case nir.MemoryOrder.Release | nir.MemoryOrder.AcqRel =>
+                  fail(s"invalid atomic load order ${order.show}")
+                case nir.MemoryOrder.SeqCst => compilerBarrier()
+                case _                      => ()
+              }
+              result
+                .append("  ")
+                .append(localName(id))
+                .append(" = *(volatile ")
+                .append(ctype(ty, "atomic load type"))
+                .append(" *)(")
+                .append(value(ptr))
+                .append(");\n")
+              order match {
+                case nir.MemoryOrder.Acquire | nir.MemoryOrder.SeqCst =>
+                  compilerBarrier()
+                case _ => ()
+              }
             case Op.Conv(Conv.Bitcast, ty, from)
                 if floatingBitcast(from.ty, ty).isDefined =>
               val temporary = s"sn_bitcast_${id.id}"

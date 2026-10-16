@@ -1061,6 +1061,72 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def atomicScalarAccessesMatchVolatileAgbccOracle(): Unit = {
+    val pointer = nir.Val.Local(nir.Local(1301), nir.Type.Ptr)
+    val stored = nir.Val.Local(nir.Local(1302), nir.Type.Int)
+    val loaded = nir.Local(1303)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_atomic_access")),
+      nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Int), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(1300), Seq(pointer, stored)),
+        nir.Inst.Let(
+          loaded,
+          nir.Op.Load(nir.Type.Int, pointer, Some(nir.MemoryOrder.SeqCst)),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(1304),
+          nir.Op.Store(
+            nir.Type.Int,
+            pointer,
+            stored,
+            Some(nir.MemoryOrder.Release)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(loaded, nir.Type.Int))
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef signed int sn_i32;
+        |sn_i32 agbc_match_atomic_access(void * ptr, sn_i32 stored) {
+        |  sn_i32 loaded = *(volatile sn_i32 *)(ptr);
+        |  *(volatile sn_i32 *)(ptr) = stored;
+        |  return loaded;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for atomic access object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-atomic-access-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
