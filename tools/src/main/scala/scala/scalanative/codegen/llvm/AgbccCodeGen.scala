@@ -945,9 +945,20 @@ private[scalanative] object AgbccCodeGen {
               s"((${ctype(ty, "conversion")})(($sourceCType)(${value(v)})))"
             } else s"((${ctype(ty, "conversion")})(${value(v)}))"
           case Conv.Trunc | Conv.Bitcast | Conv.Ptrtoint | Conv.Inttoptr |
-              Conv.Fptrunc | Conv.Fpext | Conv.Fptoui | Conv.Fptosi |
-              Conv.Uitofp | Conv.Sitofp =>
+              Conv.Fptrunc | Conv.Fpext =>
             s"((${ctype(ty, "conversion")})(${value(v)}))"
+          case Conv.Fptoui | Conv.Fptosi =>
+            val signed = conv == Conv.Fptosi
+            val intermediate = integerCType(ty, signed).getOrElse(
+              fail(s"${conv.show} target type ${ty.show}")
+            )
+            s"((${ctype(ty, "conversion")})(($intermediate)(${value(v)})))"
+          case Conv.Uitofp | Conv.Sitofp =>
+            val signed = conv == Conv.Sitofp
+            val intermediate = integerCType(v.ty, signed).getOrElse(
+              fail(s"${conv.show} source type ${v.ty.show}")
+            )
+            s"((${ctype(ty, "conversion")})(($intermediate)(${value(v)})))"
         }
       case Op.Call(_, Val.Global(g: nir.Global.Member, _), args)
           if !dataSymbols(g) =>

@@ -1707,6 +1707,156 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def numericConversionsPreserveOpcodeSignedness(): Unit = {
+    val cases = Seq(
+      (
+        "agbc_uitofp_byte",
+        nir.Type.Byte,
+        nir.Type.Float,
+        nir.Conv.Uitofp,
+        1800
+      ),
+      (
+        "agbc_sitofp_size",
+        nir.Type.Size,
+        nir.Type.Float,
+        nir.Conv.Sitofp,
+        1810
+      ),
+      ("agbc_fptoui_int", nir.Type.Float, nir.Type.Int, nir.Conv.Fptoui, 1820),
+      (
+        "agbc_fptosi_size",
+        nir.Type.Double,
+        nir.Type.Size,
+        nir.Conv.Fptosi,
+        1830
+      )
+    )
+    val definitions = cases.map {
+      case (name, from, to, conv, id) =>
+        val input = nir.Val.Local(nir.Local(id + 1), from)
+        nir.Defn.Define(
+          nir.Attrs.None,
+          owner.member(nir.Sig.Extern(name)),
+          nir.Type.Function(Seq(from), to),
+          Seq(
+            nir.Inst.Label(nir.Local(id), Seq(input)),
+            nir.Inst.Let(
+              nir.Local(id + 2),
+              nir.Op.Conv(conv, to, input),
+              nir.Next.None
+            ),
+            nir.Inst.Ret(nir.Val.Local(nir.Local(id + 2), to))
+          )
+        )
+    }
+    val generated = AgbccCodeGen.emit(definitions)
+    val oracle =
+      """typedef signed char sn_i8;
+        |typedef unsigned char sn_u8;
+        |typedef signed short sn_i16;
+        |typedef unsigned short sn_u16;
+        |typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef signed long long sn_i64;
+        |typedef unsigned long long sn_u64;
+        |typedef float sn_f32;
+        |typedef double sn_f64;
+        |
+        |sn_u32 agbc_fptosi_size(sn_f64 sn_l1831) {
+        |  sn_u32 sn_l1832;
+        |sn_label_1830: ;
+        |  sn_l1832 = ((sn_u32)((sn_i32)(sn_l1831)));
+        |  return sn_l1832;
+        |}
+        |
+        |sn_i32 agbc_fptoui_int(sn_f32 sn_l1821) {
+        |  sn_i32 sn_l1822;
+        |sn_label_1820: ;
+        |  sn_l1822 = ((sn_i32)((sn_u32)(sn_l1821)));
+        |  return sn_l1822;
+        |}
+        |
+        |sn_f32 agbc_sitofp_size(sn_u32 sn_l1811) {
+        |  sn_f32 sn_l1812;
+        |sn_label_1810: ;
+        |  sn_l1812 = ((sn_f32)((sn_i32)(sn_l1811)));
+        |  return sn_l1812;
+        |}
+        |
+        |sn_f32 agbc_uitofp_byte(sn_i8 sn_l1801) {
+        |  sn_f32 sn_l1802;
+        |sn_label_1800: ;
+        |  sn_l1802 = ((sn_f32)((sn_u8)(sn_l1801)));
+        |  return sn_l1802;
+        |}""".stripMargin
+    val dir = Files.createTempDirectory("sn-agbcc-numeric-conversion-test")
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for numeric conversion parity",
+      agbcc.isDefined
+    )
+
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      "numeric conversion .text bytes differ",
+      Files.readAllBytes(
+        extractSection(objcopy.get, oracleObject, "oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy.get, generatedObject, "generated.text")
+      )
+    )
+    assertEquals(
+      "numeric conversion relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+
+    val harness =
+      """int main(void) {
+        |  if (agbc_uitofp_byte((sn_i8)-1) != 255.0f) return 1;
+        |  if (agbc_sitofp_size(0xffffffffu) != -1.0f) return 2;
+        |  if ((sn_u32)agbc_fptoui_int(2147483648.0f) != 0x80000000u) return 3;
+        |  if (agbc_fptosi_size(-1.0) != 0xffffffffu) return 4;
+        |  return 0;
+        |}""".stripMargin
+    val hostSource = dir.resolve("numeric-conversion-harness.c")
+    val executable = dir.resolve("numeric-conversion-harness")
+    Files.write(
+      hostSource,
+      (generated + "\n" + harness).getBytes(StandardCharsets.UTF_8)
+    )
+    val cCompiler = sys.env.getOrElse("CC", "cc")
+    assertEquals(
+      "host C compiler failed",
+      0,
+      Process(
+        Seq(
+          cCompiler,
+          "-std=c99",
+          "-O2",
+          hostSource.toString,
+          "-o",
+          executable.toString
+        ),
+        dir.toFile
+      ).!
+    )
+    assertEquals(
+      "numeric conversion signedness is incorrect",
+      0,
+      Process(Seq(executable.toString), dir.toFile).!
+    )
+  }
+
   @Test def integerDivisionAndRemainderAreEmittedAndDefaultConfigStaysLlvm()
       : Unit = {
     val base = NativeConfig.empty
