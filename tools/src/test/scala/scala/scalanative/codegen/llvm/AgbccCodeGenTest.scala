@@ -2512,14 +2512,14 @@ class AgbccCodeGenTest {
           |}
           |object AgbccRandomFixture {
           |  @scala.scalanative.unsafe.exported("Random")
-          |  def random(): Int = {
+          |  def random(): Char = {
           |    AgbccRngState.value = AgbccRngState.value * 1103515245 + 24691
           |    AgbccRngState.count += 1
-          |    AgbccRngState.value >>> 16
+          |    (AgbccRngState.value >>> 16).toChar
           |  }
           |  @scala.scalanative.unsafe.exported("SeedRng")
-          |  def seed(seed: Int): Unit = {
-          |    AgbccRngState.value = seed & 0xFFFF
+          |  def seed(seed: Char): Unit = {
+          |    AgbccRngState.value = seed.toInt
           |    AgbccRngState.unknown = 0
           |  }
           |}
@@ -2612,6 +2612,7 @@ class AgbccCodeGenTest {
     val oracle =
       """typedef signed int sn_i32;
         |typedef unsigned int sn_u32;
+        |typedef unsigned short sn_u16;
         |typedef unsigned char sn_u8;
         |typedef signed long long sn_i64;
         |typedef unsigned long long sn_u64;
@@ -2622,14 +2623,13 @@ class AgbccCodeGenTest {
           |extern sn_u32 gRngValue;
           |extern sn_u32 xlat_random_sRandCount;
           |extern sn_u8 xlat_random_sUnknown;
-          |sn_i32 Random(void) {
+          |sn_u16 Random(void) {
           |  gRngValue = (sn_u32)(gRngValue * 1103515245u + 24691u);
           |  xlat_random_sRandCount += 1;
-          |  return (sn_i32)(gRngValue >> 16);
+          |  return (sn_u16)(gRngValue >> 16);
           |}
-          |void SeedRng(sn_i32 seed) {
-          |  sn_i32 masked = seed & 65535;
-          |  gRngValue = masked;
+          |void SeedRng(sn_u16 seed) {
+          |  gRngValue = seed;
           |  xlat_random_sUnknown = 0;
           |}
           |sn_i32 agbc_scala_add(sn_i32 a, sn_i32 b) {
