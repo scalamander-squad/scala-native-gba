@@ -198,6 +198,29 @@ class AgbccCodeGenTest {
         )
       )
     }
+    def numericConversion(
+        name: String,
+        conv: nir.Conv,
+        from: nir.Type,
+        to: nir.Type,
+        id: Int
+    ): nir.Defn.Define = {
+      val input = nir.Val.Local(nir.Local(id + 1), from)
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(from), to),
+        Seq(
+          nir.Inst.Label(nir.Local(id), Seq(input)),
+          nir.Inst.Let(
+            nir.Local(id + 2),
+            nir.Op.Conv(conv, to, input),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 2), to))
+        )
+      )
+    }
     val base = nir.Val.Local(nir.Local(82), nir.Type.Ptr)
     val index = nir.Val.Local(nir.Local(83), nir.Type.Int)
     val structElementPointer = nir.Defn.Define(
@@ -366,6 +389,20 @@ class AgbccCodeGenTest {
       floatingComparison("agbc_match_flt", nir.Comp.Flt, nir.Type.Float, 221),
       integerComparison("agbc_match_ule16", nir.Comp.Ule, nir.Type.Short, 150),
       integerComparison("agbc_match_ult8", nir.Comp.Ult, nir.Type.Byte, 160),
+      numericConversion(
+        "agbc_match_z_fptosi",
+        nir.Conv.Fptosi,
+        nir.Type.Float,
+        nir.Type.Int,
+        251
+      ),
+      numericConversion(
+        "agbc_match_z_sitofp",
+        nir.Conv.Sitofp,
+        nir.Type.Int,
+        nir.Type.Float,
+        261
+      ),
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
       pointerComparison("agbc_match_ptr_ne", nir.Comp.Ine, 70),
       structElementPointer,
@@ -551,6 +588,8 @@ class AgbccCodeGenTest {
         |extern sn_i32 agbc_match_urem(sn_i32, sn_i32);
         |extern sn_u8 agbc_match_ule16(sn_i16, sn_i16);
         |extern sn_u8 agbc_match_ult8(sn_i8, sn_i8);
+        |extern sn_i32 agbc_match_z_fptosi(sn_f32);
+        |extern sn_f32 agbc_match_z_sitofp(sn_i32);
         |extern sn_u8 agbc_match_ptr_eq(void *, void *);
         |extern sn_u8 agbc_match_ptr_ne(void *, void *);
         |extern void * agbc_match_elem_struct(void *, sn_i32);
@@ -641,6 +680,8 @@ class AgbccCodeGenTest {
         |  return sn_l53;
         |}
         |
+        |/* AGBC_Z_FPTOSI_ORACLE */
+        |/* AGBC_Z_SITOFP_ORACLE */
         |""".stripMargin
 
     val oracleWithElem = oracle.replace(
@@ -774,10 +815,30 @@ class AgbccCodeGenTest {
         |  return sn_l163;
         |}""".stripMargin
     )
+    val oracleWithFptosi = oracleWithUlt8.replace(
+      "/* AGBC_Z_FPTOSI_ORACLE */",
+      """sn_i32 agbc_match_z_fptosi(sn_f32 sn_l252) {
+        |  sn_i32 sn_l253;
+        |
+        |sn_label_251: ;
+        |  sn_l253 = ((sn_i32)(sn_l252));
+        |  return sn_l253;
+        |}""".stripMargin
+    )
+    val oracleWithSitofp = oracleWithFptosi.replace(
+      "/* AGBC_Z_SITOFP_ORACLE */",
+      """sn_f32 agbc_match_z_sitofp(sn_i32 sn_l262) {
+        |  sn_f32 sn_l263;
+        |
+        |sn_label_261: ;
+        |  sn_l263 = ((sn_f32)(sn_l262));
+        |  return sn_l263;
+        |}""".stripMargin
+    )
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
     val oracleObject =
-      compile(oracleWithUlt8, "oracle", dir, agbcc.get, assembler.get)
+      compile(oracleWithSitofp, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")

@@ -603,12 +603,17 @@ private[scalanative] object AgbccCodeGen {
           case _        => fail(s"floating comparison ${comp.show}")
         }
         s"((sn_u8)((${value(left)}) $operator (${value(right)})))"
-      case Op.Conv(conv, ty, v) if integerType(ty) || ty == Type.Ptr =>
+      case Op.Conv(Conv.Bitcast, ty, v)
+          if floatingType(ty) || floatingType(v.ty) =>
+        fail("floating bitcast")
+      case Op.Conv(conv, ty, v)
+          if integerType(ty) || ty == Type.Ptr || floatingType(ty) =>
         conv match {
           case Conv.Trunc | Conv.Zext | Conv.Sext | Conv.Bitcast |
-              Conv.Ptrtoint | Conv.Inttoptr | Conv.ZSizeCast | Conv.SSizeCast =>
+              Conv.Ptrtoint | Conv.Inttoptr | Conv.ZSizeCast | Conv.SSizeCast |
+              Conv.Fptrunc | Conv.Fpext | Conv.Fptoui | Conv.Fptosi |
+              Conv.Uitofp | Conv.Sitofp =>
             s"((${ctype(ty, "conversion")})(${value(v)}))"
-          case _ => fail(s"conversion ${conv.show}")
         }
       case Op.Call(_, Val.Global(g: nir.Global.Member, _), args) =>
         s"${cIdentifier(g)}(${args.map(value).mkString(", ")})"
