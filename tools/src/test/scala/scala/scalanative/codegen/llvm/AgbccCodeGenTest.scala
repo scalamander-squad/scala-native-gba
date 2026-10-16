@@ -463,6 +463,89 @@ class AgbccCodeGenTest {
     }
   }
 
+  @Test def aggregateLoadsAndStoresMatchIndependentAgbccOracle(): Unit = {
+    val aggregate = nir.Type.StructValue(Seq(nir.Type.Byte, nir.Type.Int))
+    val loadPointer = nir.Val.Local(nir.Local(401), nir.Type.Ptr)
+    val load = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_aggr_load")),
+      nir.Type.Function(Seq(nir.Type.Ptr), aggregate),
+      Seq(
+        nir.Inst.Label(nir.Local(400), Seq(loadPointer)),
+        nir.Inst.Let(
+          nir.Local(402),
+          nir.Op.Load(aggregate, loadPointer, None),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(402), aggregate))
+      )
+    )
+    val storePointer = nir.Val.Local(nir.Local(411), nir.Type.Ptr)
+    val storeValue = nir.Val.Local(nir.Local(412), aggregate)
+    val store = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_aggr_store")),
+      nir.Type.Function(Seq(nir.Type.Ptr, aggregate), nir.Type.Unit),
+      Seq(
+        nir.Inst.Label(nir.Local(410), Seq(storePointer, storeValue)),
+        nir.Inst.Let(
+          nir.Local(413),
+          nir.Op.Store(aggregate, storePointer, storeValue, None),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Unit)
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(load, store))
+    val oracle =
+      """typedef signed char sn_i8;
+        |typedef signed int sn_i32;
+        |typedef struct { sn_i8 sn_f0; sn_i32 sn_f1; } sn_record;
+        |
+        |sn_record agbc_match_aggr_load(void * sn_l401) {
+        |  sn_record sn_l402;
+        |
+        |sn_label_400: ;
+        |  sn_l402 = (*(sn_record *) (sn_l401));
+        |  return sn_l402;
+        |}
+        |
+        |void agbc_match_aggr_store(void * sn_l411, sn_record sn_l412) {
+        |
+        |sn_label_410: ;
+        |  *(sn_record *) (sn_l411) = sn_l412;
+        |  return;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for aggregate object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-aggregate-memory-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))
