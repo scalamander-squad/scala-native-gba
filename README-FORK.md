@@ -44,7 +44,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     calculations for nested struct/array paths, integer/bitwise and basic floating arithmetic operations,
     non-exceptional signed and unsigned division and remainder, integer comparisons (including unsigned 8/16-bit
     operands), pointer/reference equality,
-    conversions, direct and typed indirect calls, C varargs call sites, `sizeof`, `alignof`, aggregate extraction and
+    conversions and same-width float/integer bitcasts, direct and typed indirect calls, C varargs call sites, `sizeof`, `alignof`, aggregate extraction and
     insertion for literal struct/array paths,
     and simple label/branch/switch control flow). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
@@ -53,7 +53,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
     signatures, integer arithmetic/bitwise operations, basic floating arithmetic and finite literals, non-exceptional
     signed and unsigned integer division and remainder, integer and floating comparisons, pointer/reference equality,
-    shifts and conversions, stack allocation, typed element-address calculations for nested struct/array paths, direct
+    shifts, conversions and same-width float/integer bitcasts, stack allocation, typed element-address calculations for nested struct/array paths, direct
     calls, typed indirect calls, C varargs call sites, external scalar/aggregate global references, scalar and aggregate
     loads/stores, by-value aggregate
     signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow. A Scala 3
@@ -64,6 +64,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,
     aggregate loads/stores and zero initialization, indirect and variadic calls, bitwise logic, all shift variants,
+    32-bit float/integer and 64-bit double/long bitcasts,
     signed/unsigned comparisons, and branch fixtures. Variadic function
     definitions are still rejected. An 8-bit unsigned division check also verifies
     that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general

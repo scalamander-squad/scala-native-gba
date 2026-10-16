@@ -909,6 +909,148 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def floatingBitcastsMatchIndependentAgbccOracle(): Unit = {
+    def bitcast(
+        name: String,
+        from: nir.Type,
+        to: nir.Type,
+        entryId: Int
+    ): nir.Defn.Define = {
+      val input = nir.Val.Local(nir.Local(entryId + 1), from)
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(from), to),
+        Seq(
+          nir.Inst.Label(nir.Local(entryId), Seq(input)),
+          nir.Inst.Let(
+            nir.Local(entryId + 2),
+            nir.Op.Conv(nir.Conv.Bitcast, to, input),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(entryId + 2), to))
+        )
+      )
+    }
+
+    val definitions = Seq(
+      bitcast("agbc_match_f32_to_i32", nir.Type.Float, nir.Type.Int, 1100),
+      bitcast("agbc_match_f32_to_u32", nir.Type.Float, nir.Type.Size, 1140),
+      bitcast("agbc_match_i32_to_f32", nir.Type.Int, nir.Type.Float, 1110),
+      bitcast("agbc_match_u32_to_f32", nir.Type.Size, nir.Type.Float, 1150),
+      bitcast("agbc_match_f64_to_i64", nir.Type.Double, nir.Type.Long, 1120),
+      bitcast("agbc_match_i64_to_f64", nir.Type.Long, nir.Type.Double, 1130)
+    )
+    val generated = AgbccCodeGen.emit(definitions)
+    val oracle =
+      """typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef signed long long sn_i64;
+        |typedef float sn_f32;
+        |typedef double sn_f64;
+        |
+        |static sn_i32 sn_bitcast_f32_to_i32(sn_f32 value) {
+        |  union { sn_f32 from; sn_i32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |static sn_u32 sn_bitcast_f32_to_u32(sn_f32 value) {
+        |  union { sn_f32 from; sn_u32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |static sn_f32 sn_bitcast_i32_to_f32(sn_i32 value) {
+        |  union { sn_i32 from; sn_f32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |static sn_f32 sn_bitcast_u32_to_f32(sn_u32 value) {
+        |  union { sn_u32 from; sn_f32 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |static sn_i64 sn_bitcast_f64_to_i64(sn_f64 value) {
+        |  union { sn_f64 from; sn_i64 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |static sn_f64 sn_bitcast_i64_to_f64(sn_i64 value) {
+        |  union { sn_i64 from; sn_f64 to; } bits;
+        |  bits.from = value;
+        |  return bits.to;
+        |}
+        |sn_i32 agbc_match_f32_to_i32(sn_f32 sn_l1101) {
+        |  sn_i32 sn_l1102;
+        |
+        |sn_label_1100: ;
+        |  sn_l1102 = sn_bitcast_f32_to_i32(sn_l1101);
+        |  return sn_l1102;
+        |}
+        |sn_u32 agbc_match_f32_to_u32(sn_f32 sn_l1141) {
+        |  sn_u32 sn_l1142;
+        |
+        |sn_label_1140: ;
+        |  sn_l1142 = sn_bitcast_f32_to_u32(sn_l1141);
+        |  return sn_l1142;
+        |}
+        |sn_i64 agbc_match_f64_to_i64(sn_f64 sn_l1121) {
+        |  sn_i64 sn_l1122;
+        |
+        |sn_label_1120: ;
+        |  sn_l1122 = sn_bitcast_f64_to_i64(sn_l1121);
+        |  return sn_l1122;
+        |}
+        |sn_f32 agbc_match_i32_to_f32(sn_i32 sn_l1111) {
+        |  sn_f32 sn_l1112;
+        |
+        |sn_label_1110: ;
+        |  sn_l1112 = sn_bitcast_i32_to_f32(sn_l1111);
+        |  return sn_l1112;
+        |}
+        |sn_f64 agbc_match_i64_to_f64(sn_i64 sn_l1131) {
+        |  sn_f64 sn_l1132;
+        |
+        |sn_label_1130: ;
+        |  sn_l1132 = sn_bitcast_i64_to_f64(sn_l1131);
+        |  return sn_l1132;
+        |}
+        |sn_f32 agbc_match_u32_to_f32(sn_u32 sn_l1151) {
+        |  sn_f32 sn_l1152;
+        |
+        |sn_label_1150: ;
+        |  sn_l1152 = sn_bitcast_u32_to_f32(sn_l1151);
+        |  return sn_l1152;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for floating bitcast object parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-bitcast-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))

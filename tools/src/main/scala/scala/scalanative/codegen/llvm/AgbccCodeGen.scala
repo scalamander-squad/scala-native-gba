@@ -259,6 +259,16 @@ private[scalanative] object AgbccCodeGen {
     declarations.values.foreach(noteType)
     referencedData.foreach(global => noteType(dataTypes(global)))
 
+    val floatingBitcasts = definitions
+      .flatMap { defn =>
+        defn.insts.collect {
+          case nir.Inst.Let(_, nir.Op.Conv(nir.Conv.Bitcast, to, from), _) =>
+            floatingBitcast(from.ty, to)
+        }
+      }
+      .flatten
+      .distinct
+
     val out = new StringBuilder
     out.append("typedef signed char sn_i8;\n")
     out.append("typedef unsigned char sn_u8;\n")
@@ -361,6 +371,22 @@ private[scalanative] object AgbccCodeGen {
     }
     if (declarations.nonEmpty) out.append('\n')
 
+    floatingBitcasts.foreach { bitcast =>
+      out
+        .append("static ")
+        .append(bitcast.toCType)
+        .append(' ')
+        .append(bitcast.name)
+        .append('(')
+        .append(bitcast.fromCType)
+        .append(" value) { union { ")
+        .append(bitcast.fromCType)
+        .append(" from; ")
+        .append(bitcast.toCType)
+        .append(" to; } bits; bits.from = value; return bits.to; }\n")
+    }
+    if (floatingBitcasts.nonEmpty) out.append('\n')
+
     definitions.sortBy(defn => symbol(defn.name)).foreach { defn =>
       out.append(
         emitDefinition(
@@ -413,6 +439,48 @@ private[scalanative] object AgbccCodeGen {
         "agbcc backend does not support Unit function arguments"
       )
     if (varargIndex >= 0) args :+ "..." else args
+  }
+
+  private final case class FloatingBitcast(
+      name: String,
+      fromCType: String,
+      toCType: String
+  )
+
+  private def floatingBitcast(
+      from: nir.Type,
+      to: nir.Type
+  ): Option[FloatingBitcast] = {
+    val (fromName, fromCType, toName, toCType) = (from, to) match {
+      case (nir.Type.Float, nir.Type.Int) =>
+        ("f32", "sn_f32", "i32", "sn_i32")
+      case (nir.Type.Float, nir.Type.Size) =>
+        ("f32", "sn_f32", "u32", "sn_u32")
+      case (nir.Type.Int, nir.Type.Float) =>
+        ("i32", "sn_i32", "f32", "sn_f32")
+      case (nir.Type.Size, nir.Type.Float) =>
+        ("u32", "sn_u32", "f32", "sn_f32")
+      case (nir.Type.Double, nir.Type.Long) =>
+        ("f64", "sn_f64", "i64", "sn_i64")
+      case (nir.Type.Long, nir.Type.Double) =>
+        ("i64", "sn_i64", "f64", "sn_f64")
+      case _ => return None
+    }
+    Some(
+      FloatingBitcast(
+        s"sn_bitcast_${fromName}_to_$toName",
+        fromCType,
+        toCType
+      )
+    )
+  }
+
+  private def integerWidth(ty: nir.Type): Option[Int] = ty match {
+    case nir.Type.Bool | nir.Type.Byte  => Some(8)
+    case nir.Type.Short | nir.Type.Char => Some(16)
+    case nir.Type.Int | nir.Type.Size   => Some(32)
+    case nir.Type.Long                  => Some(64)
+    case _                              => None
   }
 
   private def emitDefinition(
@@ -671,9 +739,16 @@ private[scalanative] object AgbccCodeGen {
           case _        => fail(s"floating comparison ${comp.show}")
         }
         s"((sn_u8)((${value(left)}) $operator (${value(right)})))"
-      case Op.Conv(Conv.Bitcast, ty, v)
-          if floatingType(ty) || floatingType(v.ty) =>
-        fail("floating bitcast")
+      case Op.Conv(Conv.Bitcast, ty, v) =>
+        floatingBitcast(v.ty, ty) match {
+          case Some(bitcast) => s"${bitcast.name}(${value(v)})"
+          case None
+              if pointerType(ty) && pointerType(v.ty) ||
+                integerWidth(ty).isDefined &&
+                integerWidth(ty) == integerWidth(v.ty) =>
+            s"((${ctype(ty, "bitcast")})(${value(v)}))"
+          case None => fail(s"bitcast from ${v.ty.show} to ${ty.show}")
+        }
       case Op.Conv(conv, ty, v)
           if integerType(ty) || ty == Type.Ptr || floatingType(ty) =>
         conv match {
