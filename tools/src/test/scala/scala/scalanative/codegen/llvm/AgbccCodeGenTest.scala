@@ -2520,6 +2520,20 @@ class AgbccCodeGenTest {
           |  @scala.scalanative.unsafe.exported("agbc_scala_doublerem")
           |  def doubleRemainder(a: Double, b: Double): Double = a % b
           |}
+          |final class AgbccU16(val value: Int) extends AnyVal {
+          |  def toInt: Int = value
+          |}
+          |object AgbccU16 {
+          |  def apply(value: Int): AgbccU16 = new AgbccU16(value & 0xFFFF)
+          |}
+          |final class AgbccRng(val state: Int) extends AnyVal {
+          |  def advanced: AgbccRng = AgbccRng(AgbccRng.isoRandomize1(state))
+          |  def nextU16: AgbccU16 = AgbccU16(AgbccRng.isoRandomize1(state) >>> 16)
+          |}
+          |object AgbccRng {
+          |  def apply(state: Int): AgbccRng = new AgbccRng(state)
+          |  private def isoRandomize1(value: Int): Int = 1103515245 * value + 24691
+          |}
           |@scala.scalanative.unsafe.extern
           |object AgbccRngState {
           |  @scala.scalanative.unsafe.name("gRngValue")
@@ -2532,9 +2546,10 @@ class AgbccCodeGenTest {
           |object AgbccRandomFixture {
           |  @scala.scalanative.unsafe.exported("Random")
           |  def random(): Int = {
-          |    AgbccRngState.value = AgbccRngState.value * 1103515245 + 24691
+          |    val rng = AgbccRng(AgbccRngState.value)
+          |    AgbccRngState.value = rng.advanced.state
           |    AgbccRngState.count += 1
-          |    (AgbccRngState.value >>> 16) & 0xFFFF
+          |    rng.nextU16.toInt
           |  }
           |  @scala.scalanative.unsafe.exported("SeedRng")
           |  def seed(seed: Int): Unit = {
