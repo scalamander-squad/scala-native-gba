@@ -764,6 +764,14 @@ private[scalanative] object AgbccCodeGen {
         case _                      => s"($unsignedC)($v)"
       }
 
+    def signedValue(v: String, ty: nir.Type, signedC: String): String = {
+      val sourceC = integerCType(ty, signed = true).getOrElse(
+        fail(s"signed integer operation on ${ty.show}")
+      )
+      if (sourceC == signedC) s"($signedC)($v)"
+      else s"(($signedC)(($sourceC)($v)))"
+    }
+
     def expression(op: nir.Op): String = op match {
       case Op.Copy(v)                     => value(v)
       case Op.Extract(aggregate, indexes) =>
@@ -817,7 +825,6 @@ private[scalanative] object AgbccCodeGen {
       case Op.Bin(bin, ty, left, right) if integerType(ty) =>
         val l = value(left)
         val r = value(right)
-        val unsigned = ty == Type.Char || ty == Type.Size
         val wide = ty == Type.Long
         val unsignedC = if (wide) "sn_u64" else "sn_u32"
         val signedC = if (wide) "sn_i64" else "sn_i32"
@@ -829,19 +836,23 @@ private[scalanative] object AgbccCodeGen {
               case _        => "*"
             }
             s"((${ctype(ty, "integer operation")})(($unsignedC)($l) $operator ($unsignedC)($r)))"
-          case Bin.Sdiv => s"(($signedC)($l) / ($signedC)($r))"
+          case Bin.Sdiv =>
+            s"(${signedValue(l, ty, signedC)} / ${signedValue(r, ty, signedC)})"
           case Bin.Udiv =>
             s"(${unsignedValue(l, ty, unsignedC)} / ${unsignedValue(r, ty, unsignedC)})"
-          case Bin.Srem => s"(($signedC)($l) % ($signedC)($r))"
+          case Bin.Srem =>
+            s"(${signedValue(l, ty, signedC)} % ${signedValue(r, ty, signedC)})"
           case Bin.Urem =>
             s"(${unsignedValue(l, ty, unsignedC)} % ${unsignedValue(r, ty, unsignedC)})"
-          case Bin.And               => s"($l & $r)"
-          case Bin.Or                => s"($l | $r)"
-          case Bin.Xor               => s"($l ^ $r)"
-          case Bin.Shl               => s"(($unsignedC)($l) << ($r))"
-          case Bin.Lshr              => s"(($unsignedC)($l) >> ($r))"
-          case Bin.Ashr if !unsigned => s"(($signedC)($l) >> ($r))"
-          case _                     => fail(s"binary operation ${bin.show}")
+          case Bin.And  => s"($l & $r)"
+          case Bin.Or   => s"($l | $r)"
+          case Bin.Xor  => s"($l ^ $r)"
+          case Bin.Shl  => s"(($unsignedC)($l) << ($r))"
+          case Bin.Lshr =>
+            s"(${unsignedValue(l, ty, unsignedC)} >> ($r))"
+          case Bin.Ashr =>
+            s"(${signedValue(l, ty, signedC)} >> ($r))"
+          case _ => fail(s"binary operation ${bin.show}")
         }
       case Op.Bin(Bin.Frem, ty, left, right)
           if ty == Type.Float || ty == Type.Double =>
@@ -871,16 +882,17 @@ private[scalanative] object AgbccCodeGen {
           case Comp.Ule => ("<=", true)
           case _        => fail(s"comparison ${comp.show}")
         }
-        val cast = if (isUnsigned || ty == Type.Char || ty == Type.Size) {
-          if (ty == Type.Long) "sn_u64" else "sn_u32"
-        } else if (ty == Type.Long) "sn_i64"
-        else "sn_i32"
+        val cast =
+          if (isUnsigned) {
+            if (ty == Type.Long) "sn_u64" else "sn_u32"
+          } else if (ty == Type.Long) "sn_i64"
+          else "sn_i32"
         val leftValue =
           if (isUnsigned) unsignedValue(value(left), ty, cast)
-          else s"($cast)(${value(left)})"
+          else signedValue(value(left), ty, cast)
         val rightValue =
           if (isUnsigned) unsignedValue(value(right), ty, cast)
-          else s"($cast)(${value(right)})"
+          else signedValue(value(right), ty, cast)
         s"((sn_u8)(($leftValue) $operator ($rightValue)))"
       case Op.Comp(comp, ty, left, right) if pointerType(ty) =>
         val operator = comp match {

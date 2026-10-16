@@ -61,7 +61,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking, optimization/lowering, and
     agbcc. Their emitted `.text` bytes and relocations match an independently authored C
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
-    pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
+    pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, sign-aware narrow signed division,
+    remainder, comparisons, and shifts, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,
     aggregate loads/stores and zero initialization, indirect and variadic calls, float/double remainder call emission,
     bitwise logic, all shift variants,

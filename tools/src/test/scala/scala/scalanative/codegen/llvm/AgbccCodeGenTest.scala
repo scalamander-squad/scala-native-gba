@@ -685,36 +685,46 @@ class AgbccCodeGenTest {
   }
 
   @Test def integerBitwiseShiftsAndComparisonsMatchAgbccOracle(): Unit = {
-    def binary(name: String, bin: nir.Bin, id: Int): nir.Defn.Define = {
-      val left = nir.Val.Local(nir.Local(id + 1), nir.Type.Int)
-      val right = nir.Val.Local(nir.Local(id + 2), nir.Type.Int)
+    def binary(
+        name: String,
+        bin: nir.Bin,
+        id: Int,
+        ty: nir.Type = nir.Type.Int
+    ): nir.Defn.Define = {
+      val left = nir.Val.Local(nir.Local(id + 1), ty)
+      val right = nir.Val.Local(nir.Local(id + 2), ty)
       nir.Defn.Define(
         nir.Attrs.None,
         owner.member(nir.Sig.Extern(name)),
-        nir.Type.Function(Seq(nir.Type.Int, nir.Type.Int), nir.Type.Int),
+        nir.Type.Function(Seq(ty, ty), ty),
         Seq(
           nir.Inst.Label(nir.Local(id), Seq(left, right)),
           nir.Inst.Let(
             nir.Local(id + 3),
-            nir.Op.Bin(bin, nir.Type.Int, left, right),
+            nir.Op.Bin(bin, ty, left, right),
             nir.Next.None
           ),
-          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Int))
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), ty))
         )
       )
     }
-    def comparison(name: String, comp: nir.Comp, id: Int): nir.Defn.Define = {
-      val left = nir.Val.Local(nir.Local(id + 1), nir.Type.Int)
-      val right = nir.Val.Local(nir.Local(id + 2), nir.Type.Int)
+    def comparison(
+        name: String,
+        comp: nir.Comp,
+        id: Int,
+        ty: nir.Type = nir.Type.Int
+    ): nir.Defn.Define = {
+      val left = nir.Val.Local(nir.Local(id + 1), ty)
+      val right = nir.Val.Local(nir.Local(id + 2), ty)
       nir.Defn.Define(
         nir.Attrs.None,
         owner.member(nir.Sig.Extern(name)),
-        nir.Type.Function(Seq(nir.Type.Int, nir.Type.Int), nir.Type.Bool),
+        nir.Type.Function(Seq(ty, ty), nir.Type.Bool),
         Seq(
           nir.Inst.Label(nir.Local(id), Seq(left, right)),
           nir.Inst.Let(
             nir.Local(id + 3),
-            nir.Op.Comp(comp, nir.Type.Int, left, right),
+            nir.Op.Comp(comp, ty, left, right),
             nir.Next.None
           ),
           nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Bool))
@@ -729,13 +739,25 @@ class AgbccCodeGenTest {
       binary("agbc_match_bit_xor", nir.Bin.Xor, 640),
       binary("agbc_match_shift_ashr", nir.Bin.Ashr, 650),
       binary("agbc_match_shift_lshr", nir.Bin.Lshr, 660),
-      binary("agbc_match_shift_shl", nir.Bin.Shl, 670)
+      binary("agbc_match_shift_shl", nir.Bin.Shl, 670),
+      binary("agbc_match_byte_lshr", nir.Bin.Lshr, 680, nir.Type.Byte),
+      binary("agbc_match_short_lshr", nir.Bin.Lshr, 690, nir.Type.Short),
+      binary("agbc_match_char_ashr", nir.Bin.Ashr, 700, nir.Type.Char),
+      binary("agbc_match_size_ashr", nir.Bin.Ashr, 710, nir.Type.Size),
+      binary("agbc_match_char_sdiv", nir.Bin.Sdiv, 720, nir.Type.Char),
+      binary("agbc_match_char_srem", nir.Bin.Srem, 730, nir.Type.Char),
+      comparison("agbc_match_char_sgt", nir.Comp.Sgt, 740, nir.Type.Char),
+      comparison("agbc_match_size_slt", nir.Comp.Slt, 750, nir.Type.Size),
+      comparison("agbc_match_byte_ugt", nir.Comp.Ugt, 760, nir.Type.Byte)
     )
     val generated = AgbccCodeGen.emit(definitions)
     val oracle =
       """typedef signed int sn_i32;
         |typedef unsigned int sn_u32;
         |typedef unsigned char sn_u8;
+        |typedef signed char sn_i8;
+        |typedef signed short sn_i16;
+        |typedef unsigned short sn_u16;
         |
         |sn_u8 agbc_match_a_cmp_sgt(sn_i32 sn_l601, sn_i32 sn_l602) {
         |  sn_u8 sn_l603;
@@ -777,6 +799,54 @@ class AgbccCodeGenTest {
         |  return sn_l643;
         |}
         |
+        |sn_i8 agbc_match_byte_lshr(sn_i8 sn_l681, sn_i8 sn_l682) {
+        |  sn_i8 sn_l683;
+        |
+        |sn_label_680: ;
+        |  sn_l683 = ((sn_u32)(sn_u8)(sn_l681) >> (sn_l682));
+        |  return sn_l683;
+        |}
+        |
+        |sn_u8 agbc_match_byte_ugt(sn_i8 sn_l761, sn_i8 sn_l762) {
+        |  sn_u8 sn_l763;
+        |
+        |sn_label_760: ;
+        |  sn_l763 = ((sn_u8)(((sn_u32)(sn_u8)(sn_l761)) > ((sn_u32)(sn_u8)(sn_l762))));
+        |  return sn_l763;
+        |}
+        |
+        |sn_u16 agbc_match_char_ashr(sn_u16 sn_l701, sn_u16 sn_l702) {
+        |  sn_u16 sn_l703;
+        |
+        |sn_label_700: ;
+        |  sn_l703 = ((sn_i32)((sn_i16)(sn_l701)) >> (sn_l702));
+        |  return sn_l703;
+        |}
+        |
+        |sn_u16 agbc_match_char_sdiv(sn_u16 sn_l721, sn_u16 sn_l722) {
+        |  sn_u16 sn_l723;
+        |
+        |sn_label_720: ;
+        |  sn_l723 = ((sn_i32)((sn_i16)(sn_l721)) / (sn_i32)((sn_i16)(sn_l722)));
+        |  return sn_l723;
+        |}
+        |
+        |sn_u8 agbc_match_char_sgt(sn_u16 sn_l741, sn_u16 sn_l742) {
+        |  sn_u8 sn_l743;
+        |
+        |sn_label_740: ;
+        |  sn_l743 = ((sn_u8)(((sn_i32)((sn_i16)(sn_l741))) > ((sn_i32)((sn_i16)(sn_l742)))));
+        |  return sn_l743;
+        |}
+        |
+        |sn_u16 agbc_match_char_srem(sn_u16 sn_l731, sn_u16 sn_l732) {
+        |  sn_u16 sn_l733;
+        |
+        |sn_label_730: ;
+        |  sn_l733 = ((sn_i32)((sn_i16)(sn_l731)) % (sn_i32)((sn_i16)(sn_l732)));
+        |  return sn_l733;
+        |}
+        |
         |sn_i32 agbc_match_shift_ashr(sn_i32 sn_l651, sn_i32 sn_l652) {
         |  sn_i32 sn_l653;
         |
@@ -799,6 +869,30 @@ class AgbccCodeGenTest {
         |sn_label_670: ;
         |  sn_l673 = ((sn_u32)(sn_l671) << (sn_l672));
         |  return sn_l673;
+        |}
+        |
+        |sn_i16 agbc_match_short_lshr(sn_i16 sn_l691, sn_i16 sn_l692) {
+        |  sn_i16 sn_l693;
+        |
+        |sn_label_690: ;
+        |  sn_l693 = ((sn_u32)(sn_u16)(sn_l691) >> (sn_l692));
+        |  return sn_l693;
+        |}
+        |
+        |sn_u32 agbc_match_size_ashr(sn_u32 sn_l711, sn_u32 sn_l712) {
+        |  sn_u32 sn_l713;
+        |
+        |sn_label_710: ;
+        |  sn_l713 = ((sn_i32)(sn_l711) >> (sn_l712));
+        |  return sn_l713;
+        |}
+        |
+        |sn_u8 agbc_match_size_slt(sn_u32 sn_l751, sn_u32 sn_l752) {
+        |  sn_u8 sn_l753;
+        |
+        |sn_label_750: ;
+        |  sn_l753 = ((sn_u8)(((sn_i32)(sn_l751)) < ((sn_i32)(sn_l752))));
+        |  return sn_l753;
         |}""".stripMargin
     val agbcc = sys.env.get("AGBCC")
     val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
@@ -827,6 +921,48 @@ class AgbccCodeGenTest {
       "relocation rows differ",
       relocationRows(readelf.get, oracleObject),
       relocationRows(readelf.get, generatedObject)
+    )
+
+    val harness =
+      """int main(void) {
+        |  if (agbc_match_byte_lshr((sn_i8)-1, 1) != 127) return 1;
+        |  if (agbc_match_short_lshr((sn_i16)-1, 1) != 32767) return 2;
+        |  if (agbc_match_char_ashr(0x8000u, 1) != 0xc000u) return 3;
+        |  if (agbc_match_size_ashr(0x80000000u, 1) != 0xc0000000u) return 4;
+        |  if (agbc_match_char_sdiv(0xfffeu, 2) != 0xffffu) return 5;
+        |  if (agbc_match_char_srem(0xffffu, 2) != 0xffffu) return 6;
+        |  if (agbc_match_char_sgt(0xffffu, 0) != 0) return 7;
+        |  if (agbc_match_size_slt(0xffffffffu, 0) != 1) return 8;
+        |  if (agbc_match_byte_ugt((sn_i8)-1, 1) != 1) return 9;
+        |  return 0;
+        |}
+        |""".stripMargin
+    val hostSource = dir.resolve("integer-width-harness.c")
+    val executable = dir.resolve("integer-width-harness")
+    Files.write(
+      hostSource,
+      (generated + "\n" + harness).getBytes(StandardCharsets.UTF_8)
+    )
+    val cCompiler = sys.env.getOrElse("CC", "cc")
+    assertEquals(
+      "host C compiler failed",
+      0,
+      Process(
+        Seq(
+          cCompiler,
+          "-std=c99",
+          "-O2",
+          hostSource.toString,
+          "-o",
+          executable.toString
+        ),
+        dir.toFile
+      ).!
+    )
+    assertEquals(
+      "integer width/sign semantics are incorrect",
+      0,
+      Process(Seq(executable.toString), dir.toFile).!
     )
   }
 
