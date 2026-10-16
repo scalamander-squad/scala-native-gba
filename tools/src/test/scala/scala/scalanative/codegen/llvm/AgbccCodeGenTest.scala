@@ -589,7 +589,37 @@ class AgbccCodeGenTest {
     )
 
     val dir = Files.createTempDirectory("sn-agbcc-codegen-test")
-    val generated = AgbccCodeGen.emit(fixture)
+    val pairType = nir.Type.StructValue(Seq(nir.Type.Byte, nir.Type.Int))
+    val pairsGlobal = owner.member(nir.Sig.Extern("agbc_match_pairs"))
+    val pairsData = nir.Defn.Var(
+      nir.Attrs.None,
+      pairsGlobal,
+      pairType,
+      nir.Val.Zero(pairType)
+    )
+    val globalIndex = nir.Val.Local(nir.Local(86), nir.Type.Int)
+    val globalElement = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_elem_global")),
+      nir.Type.Function(Seq(nir.Type.Int), nir.Type.Ptr),
+      Seq(
+        nir.Inst.Label(nir.Local(85), Seq(globalIndex)),
+        nir.Inst.Let(
+          nir.Local(87),
+          nir.Op.Elem(
+            pairType,
+            nir.Val.Global(pairsGlobal, nir.Type.Ptr),
+            Seq(globalIndex, nir.Val.Int(1))
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(87), nir.Type.Ptr))
+      )
+    )
+    val generated = AgbccCodeGen.emit(
+      fixture :+ globalElement,
+      fixture ++ Seq(globalElement, pairsData)
+    )
     val oracle =
       """typedef signed char sn_i8;
         |typedef unsigned char sn_u8;
@@ -625,6 +655,7 @@ class AgbccCodeGenTest {
         |extern sn_u8 agbc_match_ptr_eq(void *, void *);
         |extern sn_u8 agbc_match_ptr_ne(void *, void *);
         |extern void * agbc_match_elem_struct(void *, sn_i32);
+        |extern void * agbc_match_elem_global(sn_i32);
         |extern sn_i32 agbc_match_struct_extract(sn_pair);
         |extern sn_pair agbc_match_struct_insert(sn_pair, sn_i32);
         |
@@ -718,7 +749,11 @@ class AgbccCodeGenTest {
 
     val oracleWithElem = oracle.replace(
       "/* AGBC_ELEM_ORACLE */",
-      """typedef struct { sn_i8 f0; sn_i32 f1; } sn_elem_struct;
+      """extern sn_pair agbc_match_pairs;
+        |void * agbc_match_elem_global(sn_i32 index) {
+        |  return &((sn_pair *)&agbc_match_pairs)[index].f1;
+        |}
+        |typedef struct { sn_i8 f0; sn_i32 f1; } sn_elem_struct;
         |void * agbc_match_elem_struct(void * base, sn_i32 index) {
         |  return &((sn_elem_struct *)base)[index].f1;
         |}""".stripMargin

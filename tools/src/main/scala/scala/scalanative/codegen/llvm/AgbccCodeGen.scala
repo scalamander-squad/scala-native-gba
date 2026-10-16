@@ -185,6 +185,16 @@ private[scalanative] object AgbccCodeGen {
         referencedData += g
       case _ => ()
     }
+    def noteNextData(next: nir.Next): Unit = next match {
+      case nir.Next.Label(_, args)    => args.foreach(noteData)
+      case nir.Next.Case(value, tail) =>
+        noteData(value)
+        noteNextData(tail)
+      case nir.Next.Unwind(exc, tail) =>
+        noteData(exc)
+        noteNextData(tail)
+      case _ => ()
+    }
 
     defnLoop(defns, addSignature, definitions, unsupported)
     definitions.foreach(noteDefinitionTypes)
@@ -202,6 +212,22 @@ private[scalanative] object AgbccCodeGen {
         case nir.Inst.Let(_, nir.Op.Store(_, ptr, value, _), _) =>
           noteData(ptr)
           noteData(value)
+        case nir.Inst.Let(_, nir.Op.Elem(_, ptr, indexes), _) =>
+          noteData(ptr)
+          indexes.foreach(noteData)
+        case nir.Inst.Let(_, nir.Op.Extract(aggregate, _), _) =>
+          noteData(aggregate)
+        case nir.Inst.Let(_, nir.Op.Insert(aggregate, value, _), _) =>
+          noteData(aggregate)
+          noteData(value)
+        case nir.Inst.Let(_, nir.Op.Bin(_, _, left, right), _) =>
+          noteData(left)
+          noteData(right)
+        case nir.Inst.Let(_, nir.Op.Comp(_, _, left, right), _) =>
+          noteData(left)
+          noteData(right)
+        case nir.Inst.Let(_, nir.Op.Conv(_, _, value), _)    => noteData(value)
+        case nir.Inst.Let(_, nir.Op.Stackalloc(_, count), _) => noteData(count)
         case nir.Inst.Let(
               _,
               nir.Op.Copy(nir.Val.Global(g: nir.Global.Member, _)),
@@ -209,6 +235,19 @@ private[scalanative] object AgbccCodeGen {
             ) if dataDefinitions(g) =>
           referencedData += g
         case _ =>
+      }
+      defn.insts.foreach {
+        case nir.Inst.Ret(value)              => noteData(value)
+        case nir.Inst.Jump(next)              => noteNextData(next)
+        case nir.Inst.If(value, thenp, elsep) =>
+          noteData(value)
+          noteNextData(thenp)
+          noteNextData(elsep)
+        case nir.Inst.Switch(value, default, cases) =>
+          noteData(value)
+          noteNextData(default)
+          cases.foreach(noteNextData)
+        case _ => ()
       }
     }
     declarations.values.foreach(noteType)
