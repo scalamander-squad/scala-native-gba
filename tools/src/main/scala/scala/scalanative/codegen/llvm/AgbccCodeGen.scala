@@ -226,9 +226,10 @@ private[scalanative] object AgbccCodeGen {
   def gen(
       selected: Seq[nir.Defn.Define],
       allDefns: Seq[nir.Defn],
-      dir: VirtualDirectory
+      dir: VirtualDirectory,
+      exportSignatures: Map[String, nir.Type.Function] = Map.empty
   ): Path = {
-    val content = emit(selected, allDefns)
+    val content = emit(selected, allDefns, exportSignatures)
     dir.write(Paths.get(OutputName))(_.write(content))
   }
 
@@ -238,6 +239,12 @@ private[scalanative] object AgbccCodeGen {
   private[llvm] def emit(
       defns: Seq[nir.Defn],
       allDefns: Seq[nir.Defn]
+  ): String = emit(defns, allDefns, Map.empty)
+
+  private[llvm] def emit(
+      defns: Seq[nir.Defn],
+      allDefns: Seq[nir.Defn],
+      exportSignatures: Map[String, nir.Type.Function]
   ): String = {
     val declarations = mutable.LinkedHashMap.empty[String, nir.Type.Function]
     val declarationGlobals =
@@ -305,6 +312,43 @@ private[scalanative] object AgbccCodeGen {
       }
     }
 
+    val selectedSymbols = defns.map(defn => symbol(defn.name)).toSet
+    val missingSignatures = exportSignatures.keySet -- selectedSymbols
+    if (missingSignatures.nonEmpty)
+      throw new BuildException(
+        s"agbcc ABI signatures refer to unselected exports: ${missingSignatures.toSeq.sorted.mkString(", ")}"
+      )
+
+    def integerAbiType(ty: nir.Type): Boolean = ty match {
+      case nir.Type.Bool | nir.Type.Byte | nir.Type.Short | nir.Type.Char |
+          nir.Type.Int | nir.Type.Size =>
+        true
+      case _ => false
+    }
+
+    def abiCompatible(scalaType: nir.Type, cType: nir.Type): Boolean =
+      scalaType == cType || integerAbiType(scalaType) && integerAbiType(cType)
+
+    def effectiveSignature(
+        name: nir.Global.Member,
+        scalaType: nir.Type.Function
+    ): nir.Type.Function = {
+      val id = symbol(name)
+      exportSignatures.get(id) match {
+        case Some(abiType) =>
+          if (scalaType.args.length != abiType.args.length ||
+              !abiCompatible(scalaType.ret, abiType.ret) ||
+              !scalaType.args.zip(abiType.args).forall {
+                case (scalaArg, cArg) => abiCompatible(scalaArg, cArg)
+              })
+            throw new BuildException(
+              s"incompatible agbcc ABI signature for $id: Scala $scalaType, C $abiType"
+            )
+          abiType
+        case None => scalaType
+      }
+    }
+
     def asmAlias(global: nir.Global.Member): String = {
       val name = symbol(global)
       if (cIdentifier(global) == name) ""
@@ -320,13 +364,14 @@ private[scalanative] object AgbccCodeGen {
 
     def addSignature(name: nir.Global.Member, ty: nir.Type.Function): Unit = {
       val id = symbol(name)
+      val cType = effectiveSignature(name, ty)
       declarations.get(id) match {
-        case Some(existing) if existing != ty =>
+        case Some(existing) if existing != cType =>
           throw new BuildException(
-            s"conflicting agbcc signatures for $id: $existing and $ty"
+            s"conflicting agbcc signatures for $id: $existing and $cType"
           )
         case _ =>
-          declarations(id) = ty
+          declarations(id) = cType
           declarationGlobals(id) = name
       }
     }
@@ -535,7 +580,8 @@ private[scalanative] object AgbccCodeGen {
           symbol,
           cIdentifier,
           ctype,
-          referencedData.toSet
+          referencedData.toSet,
+          effectiveSignature(defn.name, defn.ty)
         )
       )
       out.append('\n')
@@ -639,7 +685,8 @@ private[scalanative] object AgbccCodeGen {
       symbol: nir.Global => String,
       cIdentifier: nir.Global.Member => String,
       ctype: (nir.Type, String) => String,
-      dataSymbols: Set[nir.Global.Member]
+      dataSymbols: Set[nir.Global.Member],
+      cSignature: nir.Type.Function
   ): String = {
     import nir.{Bin, Comp, Conv, Inst, Next, Op, Type, Val}
 
@@ -648,7 +695,7 @@ private[scalanative] object AgbccCodeGen {
         s"agbcc backend does not support $what in ${defn.name.show} at ${defn.pos.show}"
       )
 
-    if (defn.ty.args.exists(_ == Type.Vararg)) fail("varargs")
+    if (cSignature.args.exists(_ == Type.Vararg)) fail("varargs")
     if (defn.insts.isEmpty) fail("empty function body")
     val entry = defn.insts.head match {
       case label: Inst.Label => label
@@ -1032,9 +1079,9 @@ private[scalanative] object AgbccCodeGen {
       result.append("  __asm__ volatile(\"\" ::: \"memory\");\n")
 
     val functionHead =
-      s"${ctype(defn.ty.ret, "function return")} ${symbol(defn.name)}(${if (args.isEmpty) "void"
+      s"${ctype(cSignature.ret, "function return")} ${symbol(defn.name)}(${if (args.isEmpty) "void"
         else
-          defn.ty.args
+          cSignature.args
             .zip(args)
             .map { case (t, n) => s"${ctype(t, "argument")} $n" }
             .mkString(", ")})"

@@ -42,6 +42,9 @@ sealed trait NativeConfig {
   /** When non-empty, route only these exported C symbol names to agbcc. */
   def agbccCodegenExports: Set[String]
 
+  /** C ABI signatures that override the Scala-level signatures of exports. */
+  def agbccCodegenExportSignatures: Map[String, nir.Type.Function]
+
   /** The garbage collector to use. */
   def gc: GC
 
@@ -335,6 +338,14 @@ sealed trait NativeConfig {
 
   /** Limit the experimental agbcc backend to named exported C symbols. */
   def withAgbccCodegenExports(value: Set[String]): NativeConfig
+
+  /** Override the C ABI signatures of selected exported symbols. This is useful
+   *  when Scala uses a wider primitive to represent a C integer type (for
+   *  example, an Int-backed u16) but the external ABI must remain narrow.
+   */
+  def withAgbccCodegenExportSignatures(
+      value: Map[String, nir.Type.Function]
+  ): NativeConfig
 }
 
 object NativeConfig {
@@ -356,6 +367,7 @@ object NativeConfig {
       agbccAbi = false,
       agbccCodegen = false,
       agbccCodegenExports = Set.empty,
+      agbccCodegenExportSignatures = Map.empty,
       gc = GC.default,
       lto = LTO.default,
       mode = Mode.default,
@@ -391,6 +403,7 @@ object NativeConfig {
       agbccAbi: Boolean,
       agbccCodegen: Boolean,
       agbccCodegenExports: Set[String],
+      agbccCodegenExportSignatures: Map[String, nir.Type.Function],
       gc: GC,
       lto: LTO,
       mode: Mode,
@@ -460,6 +473,16 @@ object NativeConfig {
     def withAgbccCodegenExports(value: Set[String]): NativeConfig =
       copy(
         agbccCodegenExports = value,
+        agbccCodegen = true,
+        agbccAbi = true,
+        useIncrementalCompilation = false
+      )
+
+    def withAgbccCodegenExportSignatures(
+        value: Map[String, nir.Type.Function]
+    ): NativeConfig =
+      copy(
+        agbccCodegenExportSignatures = value,
         agbccCodegen = true,
         agbccAbi = true,
         useIncrementalCompilation = false
@@ -585,6 +608,9 @@ object NativeConfig {
           | - agbccAbi:                $agbccAbi
           | - agbccCodegen:            $agbccCodegen
           | - agbccCodegenExports:     ${agbccCodegenExports.toSeq.sorted
+           .mkString(", ")}
+          | - agbccCodegenExportSignatures: ${agbccCodegenExportSignatures.toSeq
+           .sortBy(_._1)
            .mkString(", ")}
           | - GC:                      $gc
           | - LTO:                     $lto

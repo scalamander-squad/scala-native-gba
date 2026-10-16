@@ -157,7 +157,12 @@ object CodeGen {
           if (agbccDefinitions.nonEmpty)
             Seq(
               Future.successful(
-                AgbccCodeGen.gen(agbccDefinitions, assembly, outputDir)
+                AgbccCodeGen.gen(
+                  agbccDefinitions,
+                  assembly,
+                  outputDir,
+                  config.compilerConfig.agbccCodegenExportSignatures
+                )
               )
             )
           else Nil

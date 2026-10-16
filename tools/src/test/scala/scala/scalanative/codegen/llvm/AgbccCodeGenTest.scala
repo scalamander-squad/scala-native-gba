@@ -2133,6 +2133,25 @@ class AgbccCodeGenTest {
     }
   }
 
+  @Test def exportedAbiOverridesRejectMismatchedArities(): Unit = {
+    val definition = fixture.head
+    val overrideType = nir.Type.Function(Seq(i32), i32)
+    try {
+      AgbccCodeGen.emit(
+        Seq(definition),
+        Seq(definition),
+        Map("agbc_match_add" -> overrideType)
+      )
+      fail("ABI override with a different argument count must fail")
+    } catch {
+      case error: BuildException =>
+        assertTrue(
+          error.getMessage,
+          error.getMessage.contains("incompatible agbcc ABI signature")
+        )
+    }
+  }
+
   @Test def generatedFunctionsMatchIndependentAgbccOracleObject(): Unit = {
     val agbcc = sys.env.get("AGBCC")
     val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
@@ -2512,14 +2531,14 @@ class AgbccCodeGenTest {
           |}
           |object AgbccRandomFixture {
           |  @scala.scalanative.unsafe.exported("Random")
-          |  def random(): Char = {
+          |  def random(): Int = {
           |    AgbccRngState.value = AgbccRngState.value * 1103515245 + 24691
           |    AgbccRngState.count += 1
-          |    (AgbccRngState.value >>> 16).toChar
+          |    (AgbccRngState.value >>> 16) & 0xFFFF
           |  }
           |  @scala.scalanative.unsafe.exported("SeedRng")
-          |  def seed(seed: Char): Unit = {
-          |    AgbccRngState.value = seed.toInt
+          |  def seed(seed: Int): Unit = {
+          |    AgbccRngState.value = seed & 0xFFFF
           |    AgbccRngState.unknown = 0
           |  }
           |}
@@ -2546,6 +2565,12 @@ class AgbccCodeGenTest {
           "agbc_scala_doublerem",
           "Random",
           "SeedRng"
+        )
+      )
+      .withAgbccCodegenExportSignatures(
+        Map(
+          "Random" -> nir.Type.Function(Seq.empty, nir.Type.Char),
+          "SeedRng" -> nir.Type.Function(Seq(nir.Type.Char), nir.Type.Unit)
         )
       )
       .withGC(GC.none)
@@ -2591,8 +2616,8 @@ class AgbccCodeGenTest {
     assertTrue(source, source.contains("sn_agbcc_fmod64("))
     assertTrue(source, source.contains("union { sn_f32 from; sn_i32 to; }"))
     assertTrue(source, source.contains("union { sn_i32 from; sn_f32 to; }"))
-    assertTrue(source, source.contains("Random(void)"))
-    assertTrue(source, source.contains("SeedRng"))
+    assertTrue(source, source.contains("sn_u16 Random(void)"))
+    assertTrue(source, source.contains("SeedRng(sn_u16"))
     val agbcc = sys.env.get("AGBCC")
     assumeTrue(
       "set AGBCC to compile the Scala-exported backend output",
