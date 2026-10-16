@@ -2370,7 +2370,7 @@ class AgbccCodeGenTest {
           |  @scala.scalanative.unsafe.exported("agbc_scala_add")
           |  def add(a: Int, b: Int): Int = a + b
           |  @scala.scalanative.unsafe.exported("agbc_scala_max")
-          |  def max(a: Int, b: Int): Int = if a >= b then a else b
+          |  def max(a: Int, b: Int): Int = if (a >= b) a else b
           |  @scala.scalanative.unsafe.exported("agbc_scala_longadd")
           |  def longAdd(a: Long, b: Long): Long = a + b
           |  @scala.scalanative.unsafe.exported("agbc_scala_muladd")
