@@ -123,12 +123,33 @@ class AgbccCodeGenTest {
         )
       )
     }
+    val base = nir.Val.Local(nir.Local(82), nir.Type.Ptr)
+    val index = nir.Val.Local(nir.Local(83), nir.Type.Int)
+    val structElementPointer = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_elem_struct")),
+      nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Int), nir.Type.Ptr),
+      Seq(
+        nir.Inst.Label(nir.Local(81), Seq(base, index)),
+        nir.Inst.Let(
+          nir.Local(84),
+          nir.Op.Elem(
+            nir.Type.StructValue(Seq(nir.Type.Byte, nir.Type.Int)),
+            base,
+            Seq(index, nir.Val.Int(1))
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(84), nir.Type.Ptr))
+      )
+    )
     Seq(
       add,
       call,
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
       pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
       pointerComparison("agbc_match_ptr_ne", nir.Comp.Ine, 70),
+      structElementPointer,
       binary("agbc_match_udiv", nir.Bin.Udiv, 30),
       binary("agbc_match_rem", nir.Bin.Srem, 40),
       binary("agbc_match_urem", nir.Bin.Urem, 50),
@@ -280,6 +301,7 @@ class AgbccCodeGenTest {
         |extern sn_i32 agbc_match_urem(sn_i32, sn_i32);
         |extern sn_u8 agbc_match_ptr_eq(void *, void *);
         |extern sn_u8 agbc_match_ptr_ne(void *, void *);
+        |extern void * agbc_match_elem_struct(void *, sn_i32);
         |
         |sn_i32 agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2) {
         |  sn_i32 sn_l3;
@@ -304,6 +326,8 @@ class AgbccCodeGenTest {
         |  sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22));
         |  return sn_l23;
         |}
+        |
+        |/* AGBC_ELEM_ORACLE */
         |
         |sn_u8 agbc_match_ptr_eq(void * sn_l61, void * sn_l62) {
         |  sn_u8 sn_l63;
@@ -346,9 +370,17 @@ class AgbccCodeGenTest {
         |}
         |""".stripMargin
 
+    val oracleWithElem = oracle.replace(
+      "/* AGBC_ELEM_ORACLE */",
+      """typedef struct { sn_i8 f0; sn_i32 f1; } sn_elem_struct;
+        |void * agbc_match_elem_struct(void * base, sn_i32 index) {
+        |  return &((sn_elem_struct *)base)[index].f1;
+        |}""".stripMargin
+    )
     val generatedObject =
       compile(generated, "generated", dir, agbcc.get, assembler.get)
-    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val oracleObject =
+      compile(oracleWithElem, "oracle", dir, agbcc.get, assembler.get)
     val generatedText =
       extractSection(objcopy.get, generatedObject, "generated.text")
     val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")

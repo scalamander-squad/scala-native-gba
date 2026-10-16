@@ -237,7 +237,13 @@ private[scalanative] object AgbccCodeGen {
 
     definitions.sortBy(defn => symbol(defn.name)).foreach { defn =>
       out.append(
-        emitDefinition(defn, symbol, cIdentifier, ctype, referencedData.toSet)
+        emitDefinition(
+          defn,
+          symbol,
+          cIdentifier,
+          ctype,
+          referencedData.toSet
+        )
       )
       out.append('\n')
     }
@@ -349,7 +355,47 @@ private[scalanative] object AgbccCodeGen {
       case Op.Copy(v)             => value(v)
       case Op.Load(ty, ptr, None) =>
         s"(*(${ctype(ty, "load type")} *)(${value(ptr)}))"
-      case Op.Load(_, _, Some(_)) => fail("atomic load")
+      case Op.Load(_, _, Some(_))    => fail("atomic load")
+      case Op.Elem(ty, ptr, indexes) =>
+        if (indexes.isEmpty) fail("empty element index path")
+        def aggregateDeclaration(aggregate: Type, name: String): String =
+          aggregate match {
+            case Type.StructValue(fields) =>
+              val members = fields.zipWithIndex.map {
+                case (field, i) =>
+                  aggregateDeclaration(field, s"sn_f$i") + ";"
+              }
+              s"struct { ${members.mkString(" ")} } $name"
+            case Type.ArrayValue(element, length) =>
+              val declarator =
+                if (name == "*") s"(*)[$length]" else s"$name[$length]"
+              aggregateDeclaration(element, declarator)
+            case scalar => s"${ctype(scalar, "aggregate member")} $name"
+          }
+        var current = ty
+        val pointerType = aggregateDeclaration(ty, "*")
+        var location =
+          s"(($pointerType)(${value(ptr)}))[${value(indexes.head)}]"
+        indexes.tail.foreach { index =>
+          current match {
+            case Type.ArrayValue(element, _) =>
+              location = s"($location)[${value(index)}]"
+              current = element
+            case Type.StructValue(fields) =>
+              val fieldIndex = index match {
+                case Val.Int(n)  => n
+                case Val.Long(n) => n.toInt
+                case _ => fail(s"dynamic struct element index ${index.show}")
+              }
+              if (fieldIndex < 0 || fieldIndex >= fields.length)
+                fail(s"struct element index $fieldIndex")
+              location = s"($location).sn_f$fieldIndex"
+              current = fields(fieldIndex)
+            case _ =>
+              fail(s"element index into non-aggregate type ${current.show}")
+          }
+        }
+        s"((void *)&($location))"
       case Op.Bin(bin, ty, left, right) if integerType(ty) =>
         val l = value(left)
         val r = value(right)

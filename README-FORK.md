@@ -40,7 +40,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
   - An experimental, separate `NativeConfig.withAgbccCodegen(true)` path is being developed to generate code from
     lowered Scala Native NIR through the game's actual agbcc compiler. It is opt-in, GBA-target-only, and requires
     `AGBCC` to point to agbcc; it also disables incremental compilation and LTO. The current emitter handles a
-    deliberately narrow NIR subset (scalar integer and pointer signatures, integer arithmetic/bitwise operations,
+    deliberately narrow NIR subset (scalar integer and pointer signatures, typed element-address calculations for
+    nested struct/array paths, integer arithmetic/bitwise operations,
     non-exceptional signed and unsigned division and remainder, integer comparisons, pointer/reference equality,
     conversions, direct calls, `sizeof`, and simple label/branch/switch control flow). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
@@ -48,12 +49,14 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
     signatures, arithmetic/bitwise operations, non-exceptional signed and unsigned division and remainder,
-    integer comparisons, pointer/reference equality, shifts and conversions, direct calls, scalar external global
+    integer comparisons, pointer/reference equality, shifts and conversions, typed element-address calculations for
+    nested struct/array paths, direct calls, scalar external global
     loads/stores, `sizeof`, and label/branch/switch control flow. A Scala 3 frontend test sends exported
     `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
     optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
-    pointer equality/inequality, 64-bit addition, and branch fixtures. An 8-bit unsigned division check also verifies
+    pointer equality/inequality, struct-field address calculation, 64-bit addition, and branch fixtures. An 8-bit
+    unsigned division check also verifies
     that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; object,
     aggregate and general runtime lowering, broader NIR coverage, and ROM-level
     byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build
