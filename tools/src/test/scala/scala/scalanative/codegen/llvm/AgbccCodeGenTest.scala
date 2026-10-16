@@ -1682,6 +1682,10 @@ class AgbccCodeGenTest {
           |  def floatBits(value: Float): Int = java.lang.Float.floatToRawIntBits(value)
           |  @scala.scalanative.unsafe.exported("agbc_scala_bits_float")
           |  def bitsFloat(value: Int): Float = java.lang.Float.intBitsToFloat(value)
+          |  @scala.scalanative.unsafe.exported("agbc_scala_floatrem")
+          |  def floatRemainder(a: Float, b: Float): Float = a % b
+          |  @scala.scalanative.unsafe.exported("agbc_scala_doublerem")
+          |  def doubleRemainder(a: Double, b: Double): Double = a % b
           |}
           |@scala.scalanative.unsafe.extern
           |object AgbccRngState {
@@ -1724,6 +1728,8 @@ class AgbccCodeGenTest {
           "agbc_scala_muladd",
           "agbc_scala_float_bits",
           "agbc_scala_bits_float",
+          "agbc_scala_floatrem",
+          "agbc_scala_doublerem",
           "Random",
           "SeedRng"
         )
@@ -1765,6 +1771,10 @@ class AgbccCodeGenTest {
     assertTrue(source, source.contains("agbc_scala_muladd"))
     assertTrue(source, source.contains("agbc_scala_float_bits"))
     assertTrue(source, source.contains("agbc_scala_bits_float"))
+    assertTrue(source, source.contains("agbc_scala_floatrem"))
+    assertTrue(source, source.contains("agbc_scala_doublerem"))
+    assertTrue(source, source.contains("fmodf("))
+    assertTrue(source, source.contains("fmod("))
     assertTrue(source, source.contains("union { sn_f32 from; sn_i32 to; }"))
     assertTrue(source, source.contains("union { sn_i32 from; sn_f32 to; }"))
     assertTrue(source, source.contains("Random(void)"))
@@ -1792,6 +1802,9 @@ class AgbccCodeGenTest {
         |typedef signed long long sn_i64;
         |typedef unsigned long long sn_u64;
         |typedef float sn_f32;
+        |typedef double sn_f64;
+        |extern sn_f32 fmodf(sn_f32, sn_f32);
+        |extern sn_f64 fmod(sn_f64, sn_f64);
         |extern sn_u32 gRngValue;
         |extern sn_u32 xlat_random_sRandCount;
         |extern sn_u8 xlat_random_sUnknown;
@@ -1813,10 +1826,16 @@ class AgbccCodeGenTest {
         |  bits.from = value;
         |  return bits.to;
         |}
+        |sn_f64 agbc_scala_doublerem(sn_f64 a, sn_f64 b) {
+        |  return fmod(a, b);
+        |}
         |sn_i32 agbc_scala_float_bits(sn_f32 value) {
         |  union { sn_f32 from; sn_i32 to; } bits;
         |  bits.from = value;
         |  return bits.to;
+        |}
+        |sn_f32 agbc_scala_floatrem(sn_f32 a, sn_f32 b) {
+        |  return fmodf(a, b);
         |}
         |sn_i64 agbc_scala_longadd(sn_i64 a, sn_i64 b) {
         |  return (sn_i64)((sn_u64)a + (sn_u64)b);
