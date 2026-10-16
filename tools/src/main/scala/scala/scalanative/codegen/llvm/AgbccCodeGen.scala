@@ -333,11 +333,11 @@ private[scalanative] object AgbccCodeGen {
 
     declarations.toSeq.sortBy(_._1).foreach {
       case (name, ty) =>
-        val args = ty.args.map(t => ctype(t, "function declaration argument"))
-        if (args.contains("void"))
-          throw new BuildException(
-            "agbcc backend does not support Unit function arguments"
-          )
+        val args = cFunctionArguments(
+          ty,
+          ctype,
+          "function declaration argument"
+        )
         out
           .append("extern ")
           .append(ctype(ty.ret, "function return"))
@@ -390,6 +390,29 @@ private[scalanative] object AgbccCodeGen {
     case defn: nir.Defn.Declare =>
       addSignature(defn.name, defn.ty)
     case defn => unsupported(defn, s"definition ${defn.getClass.getSimpleName}")
+  }
+
+  private def cFunctionArguments(
+      ty: nir.Type.Function,
+      ctype: (nir.Type, String) => String,
+      where: String
+  ): Seq[String] = {
+    val varargIndex = ty.args.indexOf(nir.Type.Vararg)
+    if (varargIndex >= 0 && varargIndex != ty.args.length - 1)
+      throw new BuildException(
+        s"agbcc backend requires trailing varargs in $where"
+      )
+    val fixedArgs = if (varargIndex >= 0) ty.args.dropRight(1) else ty.args
+    if (varargIndex >= 0 && fixedArgs.isEmpty)
+      throw new BuildException(
+        s"agbcc backend requires a fixed argument before varargs in $where"
+      )
+    val args = fixedArgs.map(t => ctype(t, where))
+    if (args.contains("void"))
+      throw new BuildException(
+        "agbcc backend does not support Unit function arguments"
+      )
+    if (varargIndex >= 0) args :+ "..." else args
   }
 
   private def emitDefinition(
@@ -665,9 +688,11 @@ private[scalanative] object AgbccCodeGen {
         s"${cIdentifier(g)}(${args.map(value).mkString(", ")})"
       case Op.Call(ty, callee, args) =>
         val argumentTypes =
-          ty.args.map(t => ctype(t, "function pointer argument"))
-        if (argumentTypes.contains("void"))
-          fail("Unit function pointer argument")
+          AgbccCodeGen.cFunctionArguments(
+            ty,
+            ctype,
+            "function pointer argument"
+          )
         val signature =
           s"${ctype(ty.ret, "function pointer return")} (*)(${if (argumentTypes.isEmpty) "void"
             else argumentTypes.mkString(", ")})"

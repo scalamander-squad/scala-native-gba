@@ -567,9 +567,77 @@ class AgbccCodeGenTest {
         nir.Inst.Ret(nir.Val.Local(nir.Local(503), nir.Type.Int))
       )
     )
-    val generated = AgbccCodeGen.emit(Seq(definition))
+    val varargCallee = nir.Val.Local(nir.Local(521), nir.Type.Ptr)
+    val fixedArgument = nir.Val.Local(nir.Local(522), nir.Type.Int)
+    val extraArgument = nir.Val.Local(nir.Local(523), nir.Type.Int)
+    val varargCall = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_indirect_varargs")),
+      nir.Type.Function(
+        Seq(nir.Type.Ptr, nir.Type.Int, nir.Type.Int),
+        nir.Type.Int
+      ),
+      Seq(
+        nir.Inst.Label(
+          nir.Local(520),
+          Seq(varargCallee, fixedArgument, extraArgument)
+        ),
+        nir.Inst.Let(
+          nir.Local(524),
+          nir.Op.Call(
+            nir.Type.Function(Seq(nir.Type.Int, nir.Type.Vararg), nir.Type.Int),
+            varargCallee,
+            Seq(fixedArgument, extraArgument)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(524), nir.Type.Int))
+      )
+    )
+    val varargTarget = owner.member(nir.Sig.Extern("agb_vararg_target"))
+    val varargSignature = nir.Type.Function(
+      Seq(nir.Type.Int, nir.Type.Vararg),
+      nir.Type.Int
+    )
+    val varargDeclaration = nir.Defn.Declare(
+      nir.Attrs.None,
+      varargTarget,
+      varargSignature
+    )
+    val directFixed = nir.Val.Local(nir.Local(532), nir.Type.Int)
+    val directExtra = nir.Val.Local(nir.Local(533), nir.Type.Int)
+    val directVarargCall = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_direct_varargs")),
+      nir.Type.Function(Seq(nir.Type.Int, nir.Type.Int), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(531), Seq(directFixed, directExtra)),
+        nir.Inst.Let(
+          nir.Local(534),
+          nir.Op.Call(
+            varargSignature,
+            nir.Val.Global(varargTarget, nir.Type.Ptr),
+            Seq(directFixed, directExtra)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(534), nir.Type.Int))
+      )
+    )
+    val generated = AgbccCodeGen.emit(
+      Seq(definition, directVarargCall, varargCall, varargDeclaration)
+    )
     val oracle =
       """typedef signed int sn_i32;
+        |extern sn_i32 agb_vararg_target(sn_i32, ...);
+        |
+        |sn_i32 agbc_match_direct_varargs(sn_i32 sn_l532, sn_i32 sn_l533) {
+        |  sn_i32 sn_l534;
+        |
+        |sn_label_531: ;
+        |  sn_l534 = agb_vararg_target(sn_l532, sn_l533);
+        |  return sn_l534;
+        |}
         |
         |sn_i32 agbc_match_indirect_call(void * sn_l501, sn_i32 sn_l502) {
         |  sn_i32 sn_l503;
@@ -577,6 +645,14 @@ class AgbccCodeGenTest {
         |sn_label_500: ;
         |  sn_l503 = ((sn_i32 (*)(sn_i32))(sn_l501))(sn_l502);
         |  return sn_l503;
+        |}
+        |
+        |sn_i32 agbc_match_indirect_varargs(void * sn_l521, sn_i32 sn_l522, sn_i32 sn_l523) {
+        |  sn_i32 sn_l524;
+        |
+        |sn_label_520: ;
+        |  sn_l524 = ((sn_i32 (*)(sn_i32, ...))(sn_l521))(sn_l522, sn_l523);
+        |  return sn_l524;
         |}""".stripMargin
     val agbcc = sys.env.get("AGBCC")
     val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
