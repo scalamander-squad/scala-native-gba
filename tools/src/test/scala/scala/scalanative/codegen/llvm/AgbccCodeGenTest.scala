@@ -1857,6 +1857,76 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def unreachableEmitsAnInPlaceThumbLoop(): Unit = {
+    val condition = nir.Val.Local(nir.Local(1901), nir.Type.Bool)
+    val definition = function(
+      "agbc_match_unreachable",
+      Seq(nir.Type.Bool),
+      Seq(
+        nir.Inst.Label(nir.Local(1900), Seq(condition)),
+        nir.Inst.If(
+          condition,
+          nir.Next.Label(nir.Local(1902), Seq.empty),
+          nir.Next.Label(nir.Local(1903), Seq.empty)
+        ),
+        nir.Inst.Label(nir.Local(1902), Seq.empty),
+        nir.Inst.Ret(nir.Val.Int(1)),
+        nir.Inst.Label(nir.Local(1903), Seq.empty),
+        nir.Inst.Unreachable(nir.Next.None)
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef signed char sn_i8;
+        |typedef unsigned char sn_u8;
+        |typedef signed short sn_i16;
+        |typedef unsigned short sn_u16;
+        |typedef signed int sn_i32;
+        |typedef unsigned int sn_u32;
+        |typedef signed long long sn_i64;
+        |typedef unsigned long long sn_u64;
+        |typedef float sn_f32;
+        |typedef double sn_f64;
+        |
+        |sn_i32 agbc_match_unreachable(sn_u8 sn_l1901) {
+        |sn_label_1900: ;
+        |  if (sn_l1901) { goto sn_label_1902; } else { goto sn_label_1903; }
+        |sn_label_1902: ;
+        |  return 1;
+        |sn_label_1903: ;
+        |  __asm__ volatile("1: b 1b");
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for unreachable parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-unreachable-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      "unreachable .text bytes differ",
+      Files.readAllBytes(
+        extractSection(objcopy.get, oracleObject, "oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy.get, generatedObject, "generated.text")
+      )
+    )
+    assertEquals(
+      "unreachable relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def integerDivisionAndRemainderAreEmittedAndDefaultConfigStaysLlvm()
       : Unit = {
     val base = NativeConfig.empty

@@ -46,7 +46,7 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     operands), pointer/reference equality,
     conversions and same-width float/integer bitcasts, direct and typed indirect calls, C varargs call sites, `sizeof`, `alignof`, aggregate extraction and
     insertion for literal struct/array paths,
-    and simple label/branch/switch control flow). Unsupported
+    and simple label/branch/switch control flow with unreachable terminals). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
@@ -56,7 +56,8 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     shifts, conversions and same-width float/integer bitcasts, stack allocation, compiler memory fences, ordered scalar atomic loads/stores, typed element-address calculations for nested struct/array paths, direct
     calls, typed indirect calls, C varargs call sites, external scalar/aggregate global references, scalar and aggregate
     loads/stores, by-value aggregate
-    signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow. Scala 3
+    signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow with
+    unreachable terminals lowered to a local Thumb self-loop. Scala 3
     frontend tests send exported arithmetic/control-flow functions, float bit reinterpretations/remainders, and `Random()`/
     `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking, optimization/lowering, and
     agbcc. Their emitted `.text` bytes and relocations match an independently authored C

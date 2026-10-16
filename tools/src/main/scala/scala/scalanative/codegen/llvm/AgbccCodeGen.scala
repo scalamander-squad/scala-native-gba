@@ -1189,7 +1189,10 @@ private[scalanative] object AgbccCodeGen {
         }
         result.append("    default: ").append(transfer(default)).append('\n')
         result.append("  }\n")
-      case Inst.Unreachable(_)      => fail("unreachable instruction")
+      case Inst.Unreachable(unwind) =>
+        if (unwind != Next.None)
+          fail(s"unreachable with unwind target ${unwind.show}")
+        result.append("  __asm__ volatile(\"1: b 1b\");\n")
       case Inst.Throw(_, _)         => fail("throw instruction")
       case Inst.LinktimeIf(_, _, _) => fail("link-time branch")
     }
