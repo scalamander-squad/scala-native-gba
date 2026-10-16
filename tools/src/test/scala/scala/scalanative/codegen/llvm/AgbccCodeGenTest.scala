@@ -99,10 +99,36 @@ class AgbccCodeGenTest {
         )
       )
     }
+    def pointerComparison(
+        name: String,
+        comp: nir.Comp,
+        id: Int
+    ): nir.Defn.Define = {
+      val args = Seq(
+        nir.Val.Local(nir.Local(id + 1), nir.Type.Ptr),
+        nir.Val.Local(nir.Local(id + 2), nir.Type.Ptr)
+      )
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Ptr), nir.Type.Bool),
+        Seq(
+          nir.Inst.Label(nir.Local(id), args),
+          nir.Inst.Let(
+            nir.Local(id + 3),
+            nir.Op.Comp(comp, nir.Type.Ptr, args(0), args(1)),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(id + 3), nir.Type.Bool))
+        )
+      )
+    }
     Seq(
       add,
       call,
       binary("agbc_match_div", nir.Bin.Sdiv, 20),
+      pointerComparison("agbc_match_ptr_eq", nir.Comp.Ieq, 60),
+      pointerComparison("agbc_match_ptr_ne", nir.Comp.Ine, 70),
       binary("agbc_match_udiv", nir.Bin.Udiv, 30),
       binary("agbc_match_rem", nir.Bin.Srem, 40),
       binary("agbc_match_urem", nir.Bin.Urem, 50),
@@ -116,12 +142,21 @@ class AgbccCodeGenTest {
     assertTrue(source.contains("agbc_match_call(sn_i32 sn_l11)"))
     assertTrue(source.contains("agbc_match_div(sn_i32 sn_l21, sn_i32 sn_l22)"))
     assertTrue(source.contains("agbc_match_udiv(sn_i32 sn_l31, sn_i32 sn_l32)"))
+    assertTrue(
+      source.contains("agbc_match_ptr_eq(void * sn_l61, void * sn_l62)")
+    )
     assertTrue(source.contains("agb_match_leaf(sn_l11)"))
     assertTrue(
       source.contains("sn_l3 = ((sn_i32)((sn_u32)(sn_l1) + (sn_u32)(sn_l2)))")
     )
     assertTrue(
       source.contains("sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22))")
+    )
+    assertTrue(
+      source.contains("sn_l63 = ((sn_u8)((sn_l61) == (sn_l62)))")
+    )
+    assertTrue(
+      source.contains("sn_l73 = ((sn_u8)((sn_l71) != (sn_l72)))")
     )
   }
 
@@ -243,6 +278,8 @@ class AgbccCodeGenTest {
         |extern sn_i32 agbc_match_udiv(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_rem(sn_i32, sn_i32);
         |extern sn_i32 agbc_match_urem(sn_i32, sn_i32);
+        |extern sn_u8 agbc_match_ptr_eq(void *, void *);
+        |extern sn_u8 agbc_match_ptr_ne(void *, void *);
         |
         |sn_i32 agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2) {
         |  sn_i32 sn_l3;
@@ -266,6 +303,22 @@ class AgbccCodeGenTest {
         |sn_label_20: ;
         |  sn_l23 = ((sn_i32)(sn_l21) / (sn_i32)(sn_l22));
         |  return sn_l23;
+        |}
+        |
+        |sn_u8 agbc_match_ptr_eq(void * sn_l61, void * sn_l62) {
+        |  sn_u8 sn_l63;
+        |
+        |sn_label_60: ;
+        |  sn_l63 = ((sn_u8)((sn_l61) == (sn_l62)));
+        |  return sn_l63;
+        |}
+        |
+        |sn_u8 agbc_match_ptr_ne(void * sn_l71, void * sn_l72) {
+        |  sn_u8 sn_l73;
+        |
+        |sn_label_70: ;
+        |  sn_l73 = ((sn_u8)((sn_l71) != (sn_l72)));
+        |  return sn_l73;
         |}
         |
         |sn_i32 agbc_match_rem(sn_i32 sn_l41, sn_i32 sn_l42) {

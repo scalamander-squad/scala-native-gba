@@ -333,6 +333,11 @@ private[scalanative] object AgbccCodeGen {
       case _ => false
     }
 
+    def pointerType(ty: nir.Type): Boolean = ty match {
+      case Type.Ptr | Type.Null | _: Type.Ref | _: Type.Array => true
+      case _                                                  => false
+    }
+
     def unsignedValue(v: String, ty: nir.Type, unsignedC: String): String =
       ty match {
         case Type.Byte              => s"(($unsignedC)(sn_u8)($v))"
@@ -393,6 +398,13 @@ private[scalanative] object AgbccCodeGen {
         } else if (ty == Type.Long) "sn_i64"
         else "sn_i32"
         s"((sn_u8)((($cast)(${value(left)})) $operator (($cast)(${value(right)}))))"
+      case Op.Comp(comp, ty, left, right) if pointerType(ty) =>
+        val operator = comp match {
+          case Comp.Ieq => "=="
+          case Comp.Ine => "!="
+          case _        => fail(s"pointer comparison ${comp.show}")
+        }
+        s"((sn_u8)((${value(left)}) $operator (${value(right)})))"
       case Op.Conv(conv, ty, v) if integerType(ty) || ty == Type.Ptr =>
         conv match {
           case Conv.Trunc | Conv.Zext | Conv.Sext | Conv.Bitcast |
