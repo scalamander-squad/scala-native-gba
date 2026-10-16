@@ -546,6 +546,68 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def indirectCallsMatchIndependentAgbccOracle(): Unit = {
+    val callee = nir.Val.Local(nir.Local(501), nir.Type.Ptr)
+    val argument = nir.Val.Local(nir.Local(502), nir.Type.Int)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_indirect_call")),
+      nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Int), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(500), Seq(callee, argument)),
+        nir.Inst.Let(
+          nir.Local(503),
+          nir.Op.Call(
+            nir.Type.Function(Seq(nir.Type.Int), nir.Type.Int),
+            callee,
+            Seq(argument)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(503), nir.Type.Int))
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef signed int sn_i32;
+        |
+        |sn_i32 agbc_match_indirect_call(void * sn_l501, sn_i32 sn_l502) {
+        |  sn_i32 sn_l503;
+        |
+        |sn_label_500: ;
+        |  sn_l503 = ((sn_i32 (*)(sn_i32))(sn_l501))(sn_l502);
+        |  return sn_l503;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for indirect-call parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-indirect-call-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    val generatedText =
+      extractSection(objcopy.get, generatedObject, "generated.text")
+    val oracleText = extractSection(objcopy.get, oracleObject, "oracle.text")
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(oracleText),
+      Files.readAllBytes(generatedText)
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def emitsTypedNirAsCWithStableSymbols(): Unit = {
     val source = AgbccCodeGen.emit(fixture)
     assertTrue(source.contains("agbc_match_add(sn_i32 sn_l1, sn_i32 sn_l2)"))

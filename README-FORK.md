@@ -44,23 +44,24 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     calculations for nested struct/array paths, integer/bitwise and basic floating arithmetic operations,
     non-exceptional signed and unsigned division and remainder, integer comparisons (including unsigned 8/16-bit
     operands), pointer/reference equality,
-    conversions, direct calls, `sizeof`, `alignof`, aggregate extraction and insertion for literal struct/array paths, and simple
-    label/branch/switch control flow). Unsupported
+    conversions, direct and typed indirect calls, `sizeof`, `alignof`, aggregate extraction and insertion for literal struct/array paths,
+    and simple label/branch/switch control flow). Unsupported
     operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
     whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
     symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
     exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
-    signatures, integer arithmetic/bitwise operations, basic floating arithmetic and finite literals, non-exceptional signed and unsigned integer division and
-    remainder, integer and floating comparisons, pointer/reference equality, shifts and conversions, stack allocation, typed element-address
-    calculations for nested struct/array paths, direct calls, external scalar/aggregate global references and scalar
-    scalar and aggregate loads/stores, by-value aggregate signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch
-    control flow. A Scala 3 frontend test sends exported
+    signatures, integer arithmetic/bitwise operations, basic floating arithmetic and finite literals, non-exceptional
+    signed and unsigned integer division and remainder, integer and floating comparisons, pointer/reference equality,
+    shifts and conversions, stack allocation, typed element-address calculations for nested struct/array paths, direct
+    and typed indirect calls, external scalar/aggregate global references and scalar and aggregate loads/stores, by-value aggregate
+    signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow. A Scala 3
+    frontend test sends exported
     `Random()` and `SeedRng(Int)` functions with external RNG state/counter globals through NIR, linking,
     optimization/lowering, and agbcc. Their emitted `.text` bytes and relocations match an independently authored C
     oracle, as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,
-    aggregate loads/stores and zero initialization, and branch fixtures. An 8-bit unsigned division check also verifies
+    aggregate loads/stores and zero initialization, indirect calls, and branch fixtures. An 8-bit unsigned division check also verifies
     that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general
     aggregate and runtime lowering, broader NIR coverage, and ROM-level
     byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build

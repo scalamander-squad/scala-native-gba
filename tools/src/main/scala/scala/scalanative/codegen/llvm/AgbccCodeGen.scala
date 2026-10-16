@@ -119,6 +119,7 @@ private[scalanative] object AgbccCodeGen {
             case nir.Op.Stackalloc(ty, _)  => noteType(ty)
             case nir.Op.SizeOf(ty)         => noteType(ty)
             case nir.Op.AlignmentOf(ty)    => noteType(ty)
+            case nir.Op.Call(ty, _, _)     => noteType(ty)
             case _                         => ()
           }
         case nir.Inst.Ret(value) => noteType(value.ty)
@@ -202,12 +203,17 @@ private[scalanative] object AgbccCodeGen {
       defn.insts.foreach {
         case nir.Inst.Let(_, nir.Op.Call(ty, nir.Val.Global(g, _), args), _) =>
           g match {
+            case member: nir.Global.Member if dataDefinitions(member) =>
+              noteData(nir.Val.Global(member, nir.Type.Ptr))
             case member: nir.Global.Member => addSignature(member, ty)
             case _ => unsupported(defn, s"call target $g")
           }
           args.foreach {
             noteData
           }
+        case nir.Inst.Let(_, nir.Op.Call(_, callee, args), _) =>
+          noteData(callee)
+          args.foreach(noteData)
         case nir.Inst.Let(_, nir.Op.Load(_, ptr, _), _)         => noteData(ptr)
         case nir.Inst.Let(_, nir.Op.Store(_, ptr, value, _), _) =>
           noteData(ptr)
@@ -654,8 +660,18 @@ private[scalanative] object AgbccCodeGen {
               Conv.Uitofp | Conv.Sitofp =>
             s"((${ctype(ty, "conversion")})(${value(v)}))"
         }
-      case Op.Call(_, Val.Global(g: nir.Global.Member, _), args) =>
+      case Op.Call(_, Val.Global(g: nir.Global.Member, _), args)
+          if !dataSymbols(g) =>
         s"${cIdentifier(g)}(${args.map(value).mkString(", ")})"
+      case Op.Call(ty, callee, args) =>
+        val argumentTypes =
+          ty.args.map(t => ctype(t, "function pointer argument"))
+        if (argumentTypes.contains("void"))
+          fail("Unit function pointer argument")
+        val signature =
+          s"${ctype(ty.ret, "function pointer return")} (*)(${if (argumentTypes.isEmpty) "void"
+            else argumentTypes.mkString(", ")})"
+        s"(($signature)(${value(callee)}))(${args.map(value).mkString(", ")})"
       case Op.SizeOf(ty) =>
         s"((sn_i32)sizeof(${ctype(ty, "sizeof")}))"
       case Op.AlignmentOf(ty) =>
@@ -746,6 +762,8 @@ private[scalanative] object AgbccCodeGen {
                 .append('(')
                 .append(args.map(value).mkString(", "))
                 .append(");\n")
+            case call: Op.Call =>
+              result.append("  ").append(expression(call)).append(";\n")
             case _ => fail(s"Unit operation ${op.show}")
           }
         } else {
