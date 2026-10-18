@@ -37,6 +37,84 @@ class AgbccCodeGenTest {
       insts
     )
 
+  @Test def reachableCallbacksInGlobalInitializers(): Unit = {
+    val owner = nir.Global.Top("agbcc.Callbacks")
+    def global(name: String) = owner.member(nir.Sig.Extern(name))
+    val table = global("callback_table")
+    val nested = global("nested_table")
+    val callback = function(
+      "table_callback",
+      Seq.empty,
+      Seq(nir.Inst.Label(nir.Local(0), Seq.empty), nir.Inst.Ret(nir.Val.Int(7)))
+    )
+    val unrelated = callback.copy(name = global("unrelated_callback"))
+    val root = function(
+      "table_root",
+      Seq.empty,
+      Seq(
+        nir.Inst.Label(nir.Local(0), Seq.empty),
+        nir.Inst.Let(
+          nir.Local(1),
+          nir.Op.Copy(nir.Val.Global(table, nir.Type.Ptr)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Int(0))
+      )
+    )
+    val tableValue = nir.Val.StructValue(
+      Seq(
+        nir.Val
+          .ArrayValue(nir.Type.Ptr, Seq(nir.Val.Global(nested, nir.Type.Ptr)))
+      )
+    )
+    val nestedValue = nir.Val.ArrayValue(
+      nir.Type.Ptr,
+      Seq(
+        nir.Val.Global(table, nir.Type.Ptr),
+        nir.Val.Global(callback.name, nir.Type.Ptr),
+        nir.Val.Global(callback.name, nir.Type.Ptr),
+        nir.Val.Global(global("external_callback"), nir.Type.Ptr)
+      )
+    )
+    val all = Seq(
+      unrelated,
+      callback,
+      root,
+      nir.Defn.Const(nir.Attrs.None, table, tableValue.ty, tableValue),
+      nir.Defn.Var(nir.Attrs.None, nested, nestedValue.ty, nestedValue)
+    )
+    assertEquals(
+      Seq(root.name, callback.name),
+      AgbccCodeGen.selectReachable(Seq(root), all).map(_.name)
+    )
+    assertEquals(Seq.empty, AgbccCodeGen.selectReachable(Seq.empty, all))
+  }
+
+  @Test def wideAggregateMembersUseApcsAlignment(): Unit = {
+    val aggregate = nir.Type.StructValue(
+      Seq(nir.Type.Byte, nir.Type.Long, nir.Type.Double)
+    )
+    val parameter = nir.Val.Local(nir.Local(390), aggregate)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_wide_aggregate")),
+      nir.Type.Function(Seq(aggregate), nir.Type.Int),
+      Seq(
+        nir.Inst.Label(nir.Local(389), Seq(parameter)),
+        nir.Inst.Ret(nir.Val.Int(0))
+      )
+    )
+
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    assertTrue(generated.contains("sn_i64 sn_f1;"))
+    assertTrue(
+      generated.contains(
+        "union { sn_u64 sn_bits; sn_f64 sn_value; } sn_f2;"
+      )
+    )
+    assertFalse(generated.contains("__attribute__((aligned(8)))"))
+  }
+
   private def fixture: Seq[nir.Defn] = {
     val addArgs = Seq(
       nir.Val.Local(nir.Local(1), i32),
@@ -431,12 +509,13 @@ class AgbccCodeGenTest {
     assertFalse(source.contains("agbc_unused_array"))
   }
 
-  @Test def emitsNonFiniteFloatingConstantsAsRawBits(): Unit = {
+  @Test def emitsFloatingConstantsAsRawBits(): Unit = {
     Seq(
       (nir.Val.Float(Float.NaN), "0x7fc00000u"),
       (nir.Val.Float(Float.PositiveInfinity), "0x7f800000u"),
       (nir.Val.Double(Double.NaN), "0x7ff8000000000000ULL"),
-      (nir.Val.Double(Double.NegativeInfinity), "0xfff0000000000000ULL")
+      (nir.Val.Double(Double.NegativeInfinity), "0xfff0000000000000ULL"),
+      (nir.Val.Double(1.25), "0x3ff4000000000000ULL")
     ).zipWithIndex.foreach {
       case ((constant, expectedBits), index) =>
         val result = nir.Local(300 + index * 2)
@@ -456,6 +535,70 @@ class AgbccCodeGenTest {
           generated.contains(expectedBits)
         )
     }
+  }
+
+  @Test def doubleArrayConstantsUseRawLittleEndianStorage(): Unit = {
+    val arrayType = nir.Type.ArrayValue(nir.Type.Double, 2)
+    val constant = nir.Val.Const(
+      nir.Val.ArrayValue(
+        arrayType,
+        Seq(nir.Val.Double(1.25), nir.Val.Double(-2.5))
+      )
+    )
+    val result = nir.Local(389)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_double_array_constant")),
+      nir.Type.Function(Nil, nir.Type.Ptr),
+      Seq(
+        nir.Inst.Label(nir.Local(388), Nil),
+        nir.Inst.Let(result, nir.Op.Copy(constant), nir.Next.None),
+        nir.Inst.Ret(nir.Val.Local(result, nir.Type.Ptr))
+      )
+    )
+
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    assertTrue(
+      generated.contains(
+        "union { sn_u64 sn_bits; sn_f64 sn_value; } sn_values[2]"
+      )
+    )
+    assertFalse(generated.contains("sn_values[2] __attribute__((aligned(8)))"))
+    assertTrue(
+      generated.contains("{ 0x3ff4000000000000ULL }, { 0xc004000000000000ULL }")
+    )
+  }
+
+  @Test def inlineArrayElementLayoutUsesApcsOffsetAfterHeader(): Unit = {
+    val arrayLayout = nir.Type.StructValue(
+      Seq(
+        nir.Type.StructValue(Seq(nir.Type.Ptr, nir.Type.Int, nir.Type.Int)),
+        nir.Type.ArrayValue(nir.Type.Double, 0)
+      )
+    )
+    val pointer = nir.Val.Local(nir.Local(391), nir.Type.Ptr)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_double_array_element")),
+      nir.Type.Function(Seq(nir.Type.Ptr), nir.Type.Ptr),
+      Seq(
+        nir.Inst.Label(nir.Local(390), Seq(pointer)),
+        nir.Inst.Let(
+          nir.Local(392),
+          nir.Op.Elem(
+            arrayLayout,
+            pointer,
+            Seq(nir.Val.Int(0), nir.Val.Int(1), nir.Val.Int(0))
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(392), nir.Type.Ptr))
+      )
+    )
+
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    assertTrue(generated.contains("sn_f1[0]"))
+    assertFalse(generated.contains("sn_f1[0] __attribute__((aligned(8)))"))
   }
 
   @Test def aggregateLoadsAndStoresMatchIndependentAgbccOracle(): Unit = {
@@ -1258,6 +1401,213 @@ class AgbccCodeGenTest {
     )
   }
 
+  @Test def atomicLongAccessesEmitVolatileAgbccTypes(): Unit = {
+    val pointer = nir.Val.Local(nir.Local(1401), nir.Type.Ptr)
+    val stored = nir.Val.Local(nir.Local(1402), nir.Type.Long)
+    val loaded = nir.Local(1403)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_atomic_long")),
+      nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Long), nir.Type.Long),
+      Seq(
+        nir.Inst.Label(nir.Local(1400), Seq(pointer, stored)),
+        nir.Inst.Let(
+          loaded,
+          nir.Op.Load(nir.Type.Long, pointer, Some(nir.MemoryOrder.SeqCst)),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(1404),
+          nir.Op.Store(
+            nir.Type.Long,
+            pointer,
+            stored,
+            Some(nir.MemoryOrder.Release)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(loaded, nir.Type.Long))
+      )
+    )
+
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef signed long long sn_i64;
+        |sn_i64 agbc_match_atomic_long(void * ptr, sn_i64 stored) {
+        |  sn_i64 loaded;
+        |  __asm__ volatile("" ::: "memory");
+        |  loaded = *(volatile sn_i64 *)(ptr);
+        |  __asm__ volatile("" ::: "memory");
+        |  __asm__ volatile("" ::: "memory");
+        |  *(volatile sn_i64 *)(ptr) = stored;
+        |  return loaded;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for atomic long parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-atomic-long-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(
+        extractSection(objcopy.get, oracleObject, "oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy.get, generatedObject, "generated.text")
+      )
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
+  @Test def atomicDoubleAccessesMatchVolatileAgbccOracle(): Unit = {
+    val pointer = nir.Val.Local(nir.Local(1451), nir.Type.Ptr)
+    val stored = nir.Val.Local(nir.Local(1452), nir.Type.Double)
+    val loaded = nir.Local(1453)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_atomic_double")),
+      nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Double), nir.Type.Double),
+      Seq(
+        nir.Inst.Label(nir.Local(1450), Seq(pointer, stored)),
+        nir.Inst.Let(
+          loaded,
+          nir.Op.Load(nir.Type.Double, pointer, Some(nir.MemoryOrder.SeqCst)),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(1454),
+          nir.Op.Store(
+            nir.Type.Double,
+            pointer,
+            stored,
+            Some(nir.MemoryOrder.Release)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(loaded, nir.Type.Double))
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef double sn_f64;
+        |sn_f64 agbc_match_atomic_double(void * ptr, sn_f64 stored) {
+        |  sn_f64 loaded;
+        |  __asm__ volatile("" ::: "memory");
+        |  loaded = *(volatile sn_f64 *)(ptr);
+        |  __asm__ volatile("" ::: "memory");
+        |  __asm__ volatile("" ::: "memory");
+        |  *(volatile sn_f64 *)(ptr) = stored;
+        |  return loaded;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for atomic double parity",
+      agbcc.isDefined
+    )
+    val dir = Files.createTempDirectory("sn-agbcc-atomic-double-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      ".text bytes differ",
+      Files.readAllBytes(
+        extractSection(objcopy.get, oracleObject, "oracle.text")
+      ),
+      Files.readAllBytes(
+        extractSection(objcopy.get, generatedObject, "generated.text")
+      )
+    )
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
+  @Test def nestedAggregateConstantsMatchAgbccOracle(): Unit = {
+    val constant = nir.Val.Const(
+      nir.Val.StructValue(
+        Seq(
+          nir.Val.Int(17),
+          nir.Val.StructValue(Seq(nir.Val.Char('A'), nir.Val.Int(4660)))
+        )
+      )
+    )
+    val result = nir.Local(1501)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_nested_constant")),
+      nir.Type.Function(Nil, nir.Type.Ptr),
+      Seq(
+        nir.Inst.Label(nir.Local(1500), Nil),
+        nir.Inst.Let(result, nir.Op.Copy(constant), nir.Next.None),
+        nir.Inst.Ret(nir.Val.Local(result, nir.Type.Ptr))
+      )
+    )
+    val generated = AgbccCodeGen.emit(Seq(definition))
+    val oracle =
+      """typedef signed int sn_i32;
+        |typedef unsigned short sn_u16;
+        |typedef struct { sn_u16 sn_f0; sn_i32 sn_f1; } inner;
+        |typedef struct { sn_i32 sn_f0; inner sn_f1; } outer;
+        |static const outer expected = { 17, { 65, 4660 } };
+        |void * agbc_match_nested_constant(void) {
+        |  void * result;
+        |  result = (void *)&expected;
+        |  return result;
+        |}""".stripMargin
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils for nested constant parity",
+      agbcc.isDefined
+    )
+
+    val dir = Files.createTempDirectory("sn-agbcc-nested-constant-test")
+    val generatedObject =
+      compile(generated, "generated", dir, agbcc.get, assembler.get)
+    val oracleObject = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    Seq("text", "rodata").foreach { section =>
+      assertArrayEquals(
+        s".$section bytes differ",
+        Files.readAllBytes(
+          extractSection(objcopy.get, oracleObject, s"oracle.$section")
+        ),
+        Files.readAllBytes(
+          extractSection(objcopy.get, generatedObject, s"generated.$section")
+        )
+      )
+    }
+    assertEquals(
+      "relocation rows differ",
+      relocationRows(readelf.get, oracleObject),
+      relocationRows(readelf.get, generatedObject)
+    )
+  }
+
   @Test def floatingRemainderUsesSelfContainedAgbccHelper(): Unit = {
     def remainder(
         name: String,
@@ -2052,12 +2402,19 @@ class AgbccCodeGenTest {
       "default export filter must be empty",
       base.agbccCodegenExports.isEmpty
     )
+    assertTrue(
+      "default export order must be empty",
+      base.agbccCodegenExportOrder.isEmpty
+    )
 
-    val optIn = base.withAgbccCodegenExports(Set("only_this_export"))
+    val optIn = base
+      .withAgbccCodegenExports(Set("only_this_export"))
+      .withAgbccCodegenExportOrder(Seq("only_this_export"))
     assertTrue(optIn.agbccCodegen)
     assertTrue(optIn.agbccAbi)
     assertFalse(optIn.useIncrementalCompilation)
     assertEquals(Set("only_this_export"), optIn.agbccCodegenExports)
+    assertEquals(Seq("only_this_export"), optIn.agbccCodegenExportOrder)
 
     val args = Seq(
       nir.Val.Local(nir.Local(1), i32),
@@ -2133,6 +2490,641 @@ class AgbccCodeGenTest {
     }
   }
 
+  @Test def selectedExportsKeepRequestedDefinitionOrder(): Unit = {
+    def exported(name: String): nir.Defn.Define =
+      function(
+        name,
+        Nil,
+        Seq(
+          nir.Inst.Label(nir.Local(0), Nil),
+          nir.Inst.Ret(nir.Val.Int(0))
+        )
+      ).copy(attrs = nir.Attrs.None.withIsExtern(true))
+
+    val sourceOrder = Seq(
+      exported("agbc_source_first"),
+      exported("agbc_source_second")
+    )
+    val selected = AgbccCodeGen.selectExported(
+      sourceOrder.reverse,
+      Set("agbc_source_first", "agbc_source_second"),
+      Seq("agbc_source_first", "agbc_source_second")
+    )
+    assertEquals(sourceOrder.map(_.name), selected.map(_.name))
+    val defaultSource = AgbccCodeGen.emit(sourceOrder.reverse)
+    assertTrue(
+      "default emission must retain deterministic symbol sorting",
+      defaultSource.lastIndexOf("agbc_source_first(") <
+        defaultSource.lastIndexOf("agbc_source_second(")
+    )
+    val source = AgbccCodeGen.emit(
+      selected,
+      selected,
+      Map.empty,
+      preserveDefinitionOrder = true
+    )
+    assertTrue(
+      "emitted function definitions must preserve requested export order",
+      source.lastIndexOf("agbc_source_first(") <
+        source.lastIndexOf("agbc_source_second(")
+    )
+  }
+
+  @Test def exportedRootsPullPrivateCalleesIntoAgbccTranslationUnit(): Unit = {
+    val helperGlobal = owner.member(
+      nir.Sig.Method("privateAddOne", Seq(i32), nir.Sig.Scope.Private(owner))
+    )
+    val rootArg = nir.Val.Local(nir.Local(71), i32)
+    val helperArg = nir.Val.Local(nir.Local(81), i32)
+    val helper = nir.Defn.Define(
+      nir.Attrs.None,
+      helperGlobal,
+      nir.Type.Function(Seq(i32), i32),
+      Seq(
+        nir.Inst.Label(nir.Local(80), Seq(helperArg)),
+        nir.Inst.Let(
+          nir.Local(82),
+          nir.Op.Bin(nir.Bin.Iadd, i32, helperArg, nir.Val.Int(1)),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(82), i32))
+      )
+    )
+    val root = function(
+      "agbc_reachable_root",
+      Seq(i32),
+      Seq(
+        nir.Inst.Label(nir.Local(70), Seq(rootArg)),
+        nir.Inst.Let(
+          nir.Local(72),
+          nir.Op.Call(
+            nir.Type.Function(Seq(i32), i32),
+            nir.Val.Global(helperGlobal, nir.Type.Ptr),
+            Seq(rootArg)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(72), i32))
+      )
+    ).copy(attrs = nir.Attrs.None.withIsExtern(true))
+    val unrelated = function(
+      "agbc_unreachable_function",
+      Seq(i32),
+      Seq(
+        nir.Inst.Label(nir.Local(90), Seq(nir.Val.Local(nir.Local(91), i32))),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(91), i32))
+      )
+    )
+    val all = Seq(root, helper, unrelated)
+    val roots = AgbccCodeGen.selectExported(all, Set("agbc_reachable_root"))
+    val selected = AgbccCodeGen.selectReachable(roots, all)
+    assertEquals(Seq(root.name, helper.name), selected.map(_.name))
+    val source = AgbccCodeGen.emit(selected, all)
+    assertTrue(source, source.contains("agbc_reachable_root"))
+    assertTrue(source, source.contains("_S" + helperGlobal.mangle))
+    assertFalse(source, source.contains("agbc_unreachable_function"))
+
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and install the ARM binutils to run object parity",
+      agbcc.isDefined
+    )
+    val helperSymbol = "_S" + helperGlobal.mangle
+    val helperIdentifier = "sn_sym_" + helperSymbol
+      .getBytes(StandardCharsets.UTF_8)
+      .map(b => f"${b & 0xff}%02x")
+      .mkString
+    val oracle =
+      s"""typedef signed int sn_i32;
+         |extern sn_i32 $helperIdentifier(sn_i32) __asm__("$helperSymbol");
+         |sn_i32 $helperIdentifier(sn_i32 value) { return value + 1; }
+         |sn_i32 agbc_reachable_root(sn_i32 value) { return $helperIdentifier(value); }
+         |""".stripMargin
+    val dir = Files.createTempDirectory("sn-agbcc-call-graph-test")
+    val actualObj = compile(source, "generated", dir, agbcc.get, assembler.get)
+    val oracleObj = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      "reachable internal call graph .text differs from independent C oracle",
+      Files.readAllBytes(
+        extractSection(objcopy.get, actualObj, "generated.text")
+      ),
+      Files.readAllBytes(extractSection(objcopy.get, oracleObj, "oracle.text"))
+    )
+    assertEquals(
+      "reachable internal call graph relocations differ from independent C oracle",
+      relocationRows(readelf.get, oracleObj),
+      relocationRows(readelf.get, actualObj)
+    )
+  }
+
+  @Test def exceptionalCallsEmitEhabiLandingAndCallSiteMarkers(): Unit = {
+    val callee = owner.member(nir.Sig.Extern("agbc_may_throw"))
+    val arg = nir.Val.Local(nir.Local(101), i32)
+    val exception = nir.Val.Local(nir.Local(103), nir.Type.Ptr)
+    val copyException = nir.Val.Local(nir.Local(107), nir.Type.Ptr)
+    val handlerParam = nir.Val.Local(nir.Local(105), nir.Type.Ptr)
+    val throwing = function(
+      "agbc_exceptional_call",
+      Seq(i32),
+      Seq(
+        nir.Inst.Label(nir.Local(100), Seq(arg)),
+        nir.Inst.Let(
+          nir.Local(102),
+          nir.Op.Call(
+            nir.Type.Function(Seq(i32), i32),
+            nir.Val.Global(callee, nir.Type.Ptr),
+            Seq(arg)
+          ),
+          nir.Next.Unwind(
+            exception,
+            nir.Next.Label(nir.Local(104), Seq(exception))
+          )
+        ),
+        nir.Inst.Let(
+          nir.Local(106),
+          nir.Op.Copy(nir.Val.Null),
+          nir.Next.Unwind(
+            copyException,
+            nir.Next.Label(nir.Local(104), Seq(copyException))
+          )
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(102), i32)),
+        nir.Inst.Label(nir.Local(104), Seq(handlerParam)),
+        nir.Inst.Ret(nir.Val.Int(-1))
+      )
+    )
+
+    val source = AgbccCodeGen.emit(
+      Seq(
+        throwing,
+        nir.Defn.Declare(
+          nir.Attrs.None,
+          callee,
+          nir.Type.Function(Seq(i32), i32)
+        )
+      )
+    )
+    assertTrue(
+      source,
+      source.contains("extern void *scalanative_catch(void *);")
+    )
+    assertTrue(source, source.contains("\"X\"(&&sn_eh_label_104)"))
+    assertTrue(
+      source,
+      source.contains(
+        ".Lsn_eh_op_agbc_exceptional_call_102_handler_104_start:"
+      )
+    )
+    assertTrue(
+      source,
+      source.contains(
+        ".Lsn_eh_op_agbc_exceptional_call_102_handler_104_end:"
+      )
+    )
+    assertTrue(
+      source,
+      source.contains(
+        ".Lsn_eh_op_agbc_exceptional_call_106_handler_104_start:"
+      )
+    )
+    assertTrue(
+      source,
+      source.contains(".Lsn_eh_landing_agbc_exceptional_call_104:")
+    )
+    assertTrue(
+      source,
+      source.contains("sn_l105 = scalanative_catch(sn_eh_ucb_104);")
+    )
+  }
+
+  @Test def normalControlFlowBypassesExceptionalLandingPadCapture(): Unit = {
+    val callee = owner.member(nir.Sig.Extern("agbc_maybe_throw"))
+    val exception = nir.Val.Local(nir.Local(163), nir.Type.Ptr)
+    val handlerParam = nir.Val.Local(nir.Local(165), nir.Type.Ptr)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_mixed_exceptional_entry")),
+      nir.Type.Function(Seq.empty, i32),
+      Seq(
+        nir.Inst.Label(nir.Local(160), Seq.empty),
+        nir.Inst.Let(
+          nir.Local(162),
+          nir.Op.Call(
+            nir.Type.Function(Seq.empty, i32),
+            nir.Val.Global(callee, nir.Type.Ptr),
+            Seq.empty
+          ),
+          nir.Next.Unwind(
+            exception,
+            nir.Next.Label(nir.Local(164), Seq(exception))
+          )
+        ),
+        nir.Inst.Jump(nir.Next.Label(nir.Local(164), Seq(nir.Val.Null))),
+        nir.Inst.Label(nir.Local(164), Seq(handlerParam)),
+        nir.Inst.Ret(nir.Val.Int(7))
+      )
+    )
+    val source = AgbccCodeGen.emit(
+      Seq(
+        definition,
+        nir.Defn.Declare(
+          nir.Attrs.None,
+          callee,
+          nir.Type.Function(Seq.empty, i32)
+        )
+      )
+    )
+    val ehEntry = source.indexOf("sn_eh_label_164: ;")
+    val landingMarker =
+      source.indexOf(".Lsn_eh_landing_agbc_mixed_exceptional_entry_164:")
+    val catchCall =
+      source.indexOf("sn_l165 = scalanative_catch(sn_eh_ucb_164);")
+    val blockEntry = source.indexOf("sn_label_164: ;")
+    assertTrue(source, source.contains("\"X\"(&&sn_eh_label_164)"))
+    assertTrue(source, source.contains("goto sn_label_164;"))
+    assertTrue(ehEntry >= 0 && ehEntry < landingMarker)
+    assertTrue(landingMarker < catchCall && catchCall < blockEntry)
+  }
+
+  @Test def unitBlockParametersDoNotCreateVoidEdgeTemporaries(): Unit = {
+    val unitParam = nir.Val.Local(nir.Local(152), nir.Type.Unit)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_match_unit_edge")),
+      nir.Type.Function(Seq.empty, nir.Type.Unit),
+      Seq(
+        nir.Inst.Label(nir.Local(150), Seq.empty),
+        nir.Inst.Jump(nir.Next.Label(nir.Local(151), Seq(nir.Val.Unit))),
+        nir.Inst.Label(nir.Local(151), Seq(unitParam)),
+        nir.Inst.Ret(nir.Val.Unit)
+      )
+    )
+
+    val source = AgbccCodeGen.emit(Seq(definition))
+    assertTrue(source, source.contains("goto sn_label_151;"))
+    assertFalse(source, source.contains("void sn_edge_"))
+    assertFalse(source, source.contains("sn_l152"))
+  }
+
+  @Test def wholeProgramSelectsMethodsOutsideExportReferenceGraphs(): Unit = {
+    def body(name: String) = function(
+      name,
+      Seq.empty,
+      Seq(
+        nir.Inst.Label(nir.Local(0), Seq.empty),
+        nir.Inst.Ret(nir.Val.Int(1))
+      )
+    )
+    val exported =
+      body("whole_root").copy(attrs = nir.Attrs.None.withIsExtern(true))
+    val unreferenced = body("unreferenced_metadata_initializer")
+    val privateMethod = body("private_body")
+    val all = Seq(unreferenced, exported, privateMethod)
+    assertEquals(
+      Seq(exported.name, privateMethod.name, unreferenced.name),
+      AgbccCodeGen.selectForCodegen(all).map(_.name)
+    )
+    assertEquals(
+      Seq(exported.name),
+      AgbccCodeGen.selectForCodegen(all, Set("whole_root")).map(_.name)
+    )
+    assertEquals(
+      Seq(privateMethod.name, unreferenced.name),
+      AgbccCodeGen
+        .selectForCodegen(Seq(unreferenced, privateMethod))
+        .map(_.name)
+    )
+  }
+
+  @Test def trailingZeroAndLog10IntrinsicsHaveExecutableSemantics(): Unit = {
+    def wrapper(
+        name: String,
+        intrinsic: String,
+        ty: nir.Type,
+        extra: Seq[nir.Val]
+    ) = {
+      val target = owner.member(nir.Sig.Extern(intrinsic))
+      val argument = nir.Val.Local(nir.Local(1), ty)
+      nir.Defn.Define(
+        nir.Attrs.None,
+        owner.member(nir.Sig.Extern(name)),
+        nir.Type.Function(Seq(ty), ty),
+        Seq(
+          nir.Inst.Label(nir.Local(0), Seq(argument)),
+          nir.Inst.Let(
+            nir.Local(2),
+            nir.Op.Call(
+              nir.Type.Function(Seq(ty) ++ extra.map(_.ty), ty),
+              nir.Val.Global(target, nir.Type.Ptr),
+              Seq(argument) ++ extra
+            ),
+            nir.Next.None
+          ),
+          nir.Inst.Ret(nir.Val.Local(nir.Local(2), ty))
+        )
+      )
+    }
+    val source = AgbccCodeGen.emit(
+      Seq(
+        wrapper("test_cttz32", "llvm.cttz.i32", i32, Seq(nir.Val.False)),
+        wrapper(
+          "test_cttz64",
+          "llvm.cttz.i64",
+          nir.Type.Long,
+          Seq(nir.Val.False)
+        ),
+        wrapper("test_log10", "llvm.log10.f64", nir.Type.Double, Seq.empty),
+        wrapper("test_fabs", "llvm.fabs.f64", nir.Type.Double, Seq.empty)
+      )
+    )
+    assertFalse(source, source.contains("llvm.cttz"))
+    assertFalse(source, source.contains("llvm.log10"))
+    val harness =
+      """
+        |#include <math.h>
+        |int main(void) {
+        |  unsigned long long state = 0x123456789abcdefULL;
+        |  int i;
+        |  if (test_cttz32(0) != 32 || test_cttz64(0) != 64) return 1;
+        |  for (i = 0; i < 64; ++i) {
+        |    if (test_cttz64(1ULL << i) != i) return 2;
+        |    if (i < 32 && test_cttz32(1U << i) != i) return 3;
+        |  }
+        |  for (i = 0; i < 4096; ++i) {
+        |    unsigned int low;
+        |    state = state * 6364136223846793005ULL + 1ULL;
+        |    low = (unsigned int)state;
+        |    if (test_cttz32(low) != (low ? __builtin_ctz(low) : 32)) return 4;
+        |    if (test_cttz64(state) != (state ? __builtin_ctzll(state) : 64)) return 5;
+        |  }
+        |  if (test_log10(1000.0) != 3.0 || test_log10(1.0) != 0.0) return 6;
+        |  if (!isinf(test_log10(0.0)) || !signbit(test_log10(0.0))) return 7;
+        |  if (!isnan(test_log10(-1.0)) || !isinf(test_log10(INFINITY))) return 8;
+        |  if (test_fabs(-2.5) != 2.5 || signbit(test_fabs(-0.0))) return 9;
+        |  if (!isnan(test_fabs(NAN)) || test_fabs(-INFINITY) != INFINITY) return 10;
+        |  return 0;
+        |}
+        |""".stripMargin
+    val dir = Files.createTempDirectory("agbcc-intrinsics")
+    val cFile = dir.resolve("intrinsics.c")
+    val exe = dir.resolve("intrinsics")
+    Files.write(cFile, (source + harness).getBytes(StandardCharsets.UTF_8))
+    assertEquals(
+      0,
+      Process(
+        Seq(
+          sys.env.getOrElse("CC", "cc"),
+          "-std=c99",
+          "-O2",
+          cFile.toString,
+          "-lm",
+          "-o",
+          exe.toString
+        )
+      ).!
+    )
+    assertEquals(0, Process(Seq(exe.toString)).!)
+  }
+
+  @Test def stackScopeIntrinsicsAreInlineInTheAllocatingFunction(): Unit = {
+    val save = owner.member(nir.Sig.Extern("llvm.stacksave"))
+    val restore = owner.member(nir.Sig.Extern("llvm.stackrestore"))
+    val saved = nir.Val.Local(nir.Local(2), nir.Type.Ptr)
+    val definition = function(
+      "test_stack_scope",
+      Seq(nir.Type.Int),
+      Seq(
+        nir.Inst
+          .Label(nir.Local(0), Seq(nir.Val.Local(nir.Local(1), nir.Type.Int))),
+        nir.Inst.Let(
+          nir.Local(2),
+          nir.Op.Call(
+            nir.Type.Function(Seq.empty, nir.Type.Ptr),
+            nir.Val.Global(save, nir.Type.Ptr),
+            Seq.empty
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(4),
+          nir.Op.Stackalloc(
+            nir.Type.Int,
+            nir.Val.Local(nir.Local(1), nir.Type.Int)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(3),
+          nir.Op.Call(
+            nir.Type.Function(Seq(nir.Type.Ptr), nir.Type.Unit),
+            nir.Val.Global(restore, nir.Type.Ptr),
+            Seq(saved)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Int(0))
+      )
+    )
+    val source = AgbccCodeGen.emit(Seq(definition))
+    assertTrue(
+      source,
+      source.contains(
+        "__asm__ volatile(\"@sn_xlat_stackptr %0\" : \"=l\"(sn_l2)"
+      )
+    )
+    assertTrue(
+      source,
+      source.contains("__asm__ volatile(\"mov sp, %0\" : : \"r\"(sn_l2)")
+    )
+    assertFalse(source, source.contains("llvm.stacksave"))
+    assertFalse(source, source.contains("llvm.stackrestore"))
+  }
+
+  @Test def llvmPopulationCountIntrinsicUsesAgbccLocalHelper(): Unit = {
+    val intrinsic = owner.member(nir.Sig.Extern("llvm.ctpop.i32"))
+    val arg = nir.Val.Local(nir.Local(162), i32)
+    val definition = function(
+      "agbc_match_ctpop",
+      Seq(i32),
+      Seq(
+        nir.Inst.Label(nir.Local(160), Seq(arg)),
+        nir.Inst.Let(
+          nir.Local(163),
+          nir.Op.Call(
+            nir.Type.Function(Seq(i32), i32),
+            nir.Val.Global(intrinsic, nir.Type.Ptr),
+            Seq(arg)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(163), i32))
+      )
+    )
+    val declaration = nir.Defn.Declare(
+      nir.Attrs.None,
+      intrinsic,
+      nir.Type.Function(Seq(i32), i32)
+    )
+
+    val source = AgbccCodeGen.emit(Seq(definition, declaration))
+    assertTrue(
+      source,
+      source.contains(
+        "static sn_i32 sn_agbcc_intrinsic_ctpop_i32(sn_i32 value)"
+      )
+    )
+    assertTrue(source, source.contains("sn_agbcc_intrinsic_ctpop_i32(sn_l162)"))
+    assertFalse(source, source.contains("llvm.ctpop.i32"))
+  }
+
+  @Test def exportedRootsPullIndirectFunctionPointerTargetsIntoAgbccTranslationUnit()
+      : Unit = {
+    val helperGlobal = owner.member(
+      nir.Sig
+        .Method("privateIndirectTarget", Seq(i32), nir.Sig.Scope.Private(owner))
+    )
+    val helperArg = nir.Val.Local(nir.Local(101), i32)
+    val helper = nir.Defn.Define(
+      nir.Attrs.None,
+      helperGlobal,
+      nir.Type.Function(Seq(i32), i32),
+      Seq(
+        nir.Inst.Label(nir.Local(100), Seq(helperArg)),
+        nir.Inst.Ret(helperArg)
+      )
+    )
+    val rootArg = nir.Val.Local(nir.Local(111), i32)
+    val callee = nir.Val.Local(nir.Local(112), nir.Type.Ptr)
+    val root = function(
+      "agbc_indirect_root",
+      Seq(i32),
+      Seq(
+        nir.Inst.Label(nir.Local(110), Seq(rootArg)),
+        nir.Inst.Let(
+          nir.Local(112),
+          nir.Op.Copy(nir.Val.Global(helperGlobal, nir.Type.Ptr)),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(113),
+          nir.Op.Call(
+            nir.Type.Function(Seq(i32), i32),
+            callee,
+            Seq(rootArg)
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(113), i32))
+      )
+    ).copy(attrs = nir.Attrs.None.withIsExtern(true))
+    val unrelated = function(
+      "agbc_indirect_unreachable",
+      Seq(i32),
+      Seq(
+        nir.Inst.Label(nir.Local(120), Seq(nir.Val.Local(nir.Local(121), i32))),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(121), i32))
+      )
+    )
+    val all = Seq(root, helper, unrelated)
+    val roots = AgbccCodeGen.selectExported(all, Set("agbc_indirect_root"))
+    val selected = AgbccCodeGen.selectReachable(roots, all)
+
+    assertEquals(Seq(root.name, helper.name), selected.map(_.name))
+    val source = AgbccCodeGen.emit(selected, all)
+    assertTrue(source, source.contains("agbc_indirect_root"))
+    assertTrue(source, source.contains("_S" + helperGlobal.mangle))
+    assertFalse(source, source.contains("agbc_indirect_unreachable"))
+
+    val agbcc = sys.env.get("AGBCC")
+    val assembler = sys.env.get("ARM_AS").orElse(Some("arm-none-eabi-as"))
+    val objcopy =
+      sys.env.get("ARM_OBJCOPY").orElse(Some("arm-none-eabi-objcopy"))
+    val readelf =
+      sys.env.get("ARM_READELF").orElse(Some("arm-none-eabi-readelf"))
+    assumeTrue(
+      "set AGBCC and ARM binutils to run function-pointer object parity",
+      agbcc.isDefined
+    )
+    val helperSymbol = "_S" + helperGlobal.mangle
+    val helperIdentifier = "sn_sym_" + helperSymbol
+      .getBytes(StandardCharsets.UTF_8)
+      .map(b => f"${b & 0xff}%02x")
+      .mkString
+    val oracle =
+      s"""typedef signed int sn_i32;
+         |extern sn_i32 $helperIdentifier(sn_i32) __asm__("$helperSymbol");
+         |extern sn_i32 agbc_indirect_root(sn_i32);
+         |sn_i32 $helperIdentifier(sn_i32 sn_l101) { sn_label_100: ; return sn_l101; }
+         |sn_i32 agbc_indirect_root(sn_i32 sn_l111) {
+         |  void *sn_l112;
+         |  sn_i32 sn_l113;
+         |sn_label_110: ;
+         |  sn_l112 = ((void *)&$helperIdentifier);
+         |  sn_l113 = ((sn_i32 (*)(sn_i32))(sn_l112))(sn_l111);
+         |  return sn_l113;
+         |}
+         |""".stripMargin
+    val dir = Files.createTempDirectory("sn-agbcc-indirect-call-graph-test")
+    val actualObj = compile(source, "generated", dir, agbcc.get, assembler.get)
+    val oracleObj = compile(oracle, "oracle", dir, agbcc.get, assembler.get)
+    assertArrayEquals(
+      s"reachable indirect call graph .text differs from C oracle\n$source",
+      Files.readAllBytes(
+        extractSection(objcopy.get, actualObj, "generated.text")
+      ),
+      Files.readAllBytes(extractSection(objcopy.get, oracleObj, "oracle.text"))
+    )
+    assertEquals(
+      "reachable indirect call graph relocations differ from C oracle",
+      relocationRows(readelf.get, oracleObj),
+      relocationRows(readelf.get, actualObj)
+    )
+  }
+
+  @Test def callSitesMayUseDifferentScalaReferenceTypesForOneCAbi(): Unit = {
+    val allocator = owner.member(nir.Sig.Extern("sn_reference_allocator"))
+    val nonNull = nir.Type.Ref(owner, exact = true, nullable = false)
+    val nullable = nir.Type.Ref(owner, exact = false, nullable = true)
+    val definition = function(
+      "agbc_reference_call_sites",
+      Seq.empty,
+      Seq(
+        nir.Inst.Label(nir.Local(100), Seq.empty),
+        nir.Inst.Let(
+          nir.Local(101),
+          nir.Op.Call(
+            nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Size), nonNull),
+            nir.Val.Global(allocator, nir.Type.Ptr),
+            Seq(nir.Val.Zero(nir.Type.Ptr), nir.Val.Size(4))
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Let(
+          nir.Local(102),
+          nir.Op.Call(
+            nir.Type.Function(Seq(nir.Type.Ptr, nir.Type.Size), nullable),
+            nir.Val.Global(allocator, nir.Type.Ptr),
+            Seq(nir.Val.Zero(nir.Type.Ptr), nir.Val.Size(8))
+          ),
+          nir.Next.None
+        ),
+        nir.Inst.Ret(nir.Val.Int(0))
+      )
+    )
+    val source = AgbccCodeGen.emit(Seq(definition))
+    assertEquals(
+      1,
+      source
+        .sliding("extern void * sn_reference_allocator".length)
+        .count(_ == "extern void * sn_reference_allocator")
+    )
+  }
+
   @Test def exportedAbiOverridesRejectMismatchedArities(): Unit = {
     val definition = fixture.head
     val overrideType = nir.Type.Function(Seq(i32), i32)
@@ -2150,6 +3142,24 @@ class AgbccCodeGenTest {
           error.getMessage.contains("incompatible agbcc ABI signature")
         )
     }
+  }
+
+  @Test def pointerLocalsAllowReferenceAndRawPointerViews(): Unit = {
+    val rawPointer = nir.Type.Ptr
+    val reference = nir.Type.Ref(owner)
+    val argument = nir.Val.Local(nir.Local(1), rawPointer)
+    val definition = nir.Defn.Define(
+      nir.Attrs.None,
+      owner.member(nir.Sig.Extern("agbc_pointer_alias")),
+      nir.Type.Function(Seq(rawPointer), rawPointer),
+      Seq(
+        nir.Inst.Label(nir.Local(0), Seq(argument)),
+        nir.Inst.Ret(nir.Val.Local(nir.Local(1), reference))
+      )
+    )
+    val source = AgbccCodeGen.emit(Seq(definition))
+    assertTrue(source, source.contains("agbc_pointer_alias(void * sn_l1)"))
+    assertTrue(source, source.contains("return sn_l1;"))
   }
 
   @Test def generatedFunctionsMatchIndependentAgbccOracleObject(): Unit = {
@@ -2580,6 +3590,20 @@ class AgbccCodeGenTest {
           "agbc_scala_doublerem",
           "Random",
           "SeedRng"
+        )
+      )
+      .withAgbccCodegenExportOrder(
+        Seq(
+          "Random",
+          "SeedRng",
+          "agbc_scala_add",
+          "agbc_scala_bits_float",
+          "agbc_scala_doublerem",
+          "agbc_scala_float_bits",
+          "agbc_scala_floatrem",
+          "agbc_scala_longadd",
+          "agbc_scala_max",
+          "agbc_scala_muladd"
         )
       )
       .withAgbccCodegenExportSignatures(

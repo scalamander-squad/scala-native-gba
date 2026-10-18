@@ -50,7 +50,10 @@ static uintptr_t find_landing_pad(_Unwind_Context *ctx, uint8_t *type_index_out)
     CallSite cs; cs.start = read_uleb(&p); cs.len = read_uleb(&p); cs.lp = read_uleb(&p); cs.action = read_uleb(&p);
     if (!cs.lp) continue;
     uintptr_t s = func_start + cs.start;
-    if (ip < s || ip > s + cs.len) continue;
+    /* Call-site ranges are half-open. In particular, an empty range emitted
+     * for a non-throwing NIR operation must never claim an instruction at its
+     * boundary. */
+    if (ip < s || ip >= s + cs.len) continue;
     uint8_t ti = 0;
     if (cs.action) { LSDA_ptr a = action_table + cs.action - 1; ti = *a++; (void)read_sleb(&a); }
     *type_index_out = ti;

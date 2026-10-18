@@ -36,9 +36,15 @@ private[scalanative] class Metadata(
   val canAlwaysUseFastITables = rtti.valuesIterator.forall(_.canUseFastITables)
 
   def initTraitIds(): (Seq[Trait], TraitsUniverse.TraitId.Context) = {
-    val traits = analysis.infos.valuesIterator.collect {
-      case info: Trait => info
-    }.toIndexedSeq
+    // `analysis.infos` is backed by unordered linker collections. Trait IDs
+    // are embedded into generated type metadata, so keep their assignment
+    // stable across equivalent link runs.
+    val traits = analysis.infos.valuesIterator
+      .collect {
+        case info: Trait => info
+      }
+      .toIndexedSeq
+      .sortBy(_.name.show)
     val universe = new TraitsUniverse(traits)
     val ctx = universe.assignIds(ids)
     (traits, ctx)
@@ -55,10 +61,14 @@ private[scalanative] class Metadata(
       out += node
       val start = id
       id += 1
+      // Subclasses are accumulated in sets during reachability analysis. The
+      // traversal order determines class IDs and subclass ranges, both of
+      // which become observable constants in generated code.
       topLevelSubclassOrdering(
         node.subclasses
           .filter(_.parent.contains(node))
           .toArray
+          .sortBy(_.name.show)
       ).foreach(loop(_, identity))
       val end = id - 1
       ids(node) = start

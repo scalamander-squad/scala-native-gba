@@ -139,3 +139,9 @@ int main(void) {
   TR_RESULT[3] = failed == 0 && passed > 0 ? 0x50415353u : 0x4641494Cu;
   return 0;
 }
+
+/* Overwrite dead callee stack space to expose prematurely restored caller buffers. */
+void tr_clobber_stack(void) {
+  volatile uint8_t scratch[512];
+  for (unsigned i = 0; i < sizeof scratch; ++i) scratch[i] = (uint8_t)(i ^ 0xa5);
+}

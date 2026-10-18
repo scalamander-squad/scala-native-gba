@@ -147,9 +147,15 @@ object CodeGen {
 
       if (config.compilerConfig.agbccCodegen) {
         AgbccCodeGen.validateConfig(config.compilerConfig)
-        val agbccDefinitions = AgbccCodeGen.selectExported(
-          assembly,
-          config.compilerConfig.agbccCodegenExports
+        val agbccAssembly = assembly.map {
+          case definition: nir.Defn.Define =>
+            AgbccCodeGen.prepareForAgbcc(definition)
+          case other => other
+        }
+        val agbccDefinitions = AgbccCodeGen.selectForCodegen(
+          agbccAssembly,
+          config.compilerConfig.agbccCodegenExports,
+          config.compilerConfig.agbccCodegenExportOrder
         )
         val agbccNames: Set[nir.Global] = agbccDefinitions.map(_.name).toSet
         val llvmDefinitions = assembly.filterNot(defn => agbccNames(defn.name))
@@ -159,9 +165,10 @@ object CodeGen {
               Future.successful(
                 AgbccCodeGen.gen(
                   agbccDefinitions,
-                  assembly,
+                  agbccAssembly,
                   outputDir,
-                  config.compilerConfig.agbccCodegenExportSignatures
+                  config.compilerConfig.agbccCodegenExportSignatures,
+                  config.compilerConfig.agbccCodegenExportOrder.nonEmpty
                 )
               )
             )

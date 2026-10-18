@@ -53,3 +53,6 @@ bin/
 .DS_Store
 .devenv
 .direnv
+
+# Python bytecode from GBA build tooling
+__pycache__/

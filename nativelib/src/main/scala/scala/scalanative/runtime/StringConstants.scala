@@ -5,6 +5,7 @@ import scalanative.unsafe._
 
 @extern
 object StringConstants {
-  def snErrorPrefix: CString = extern
-  def snFatalErrorPrefix: CString = extern
+  // C pointer objects, not callable accessors; extern fields use var syntax.
+  var snErrorPrefix: CString = extern
+  var snFatalErrorPrefix: CString = extern
 }

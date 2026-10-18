@@ -11,11 +11,9 @@ private[scalanative] case class PlatformInfo(
     useGCYieldPointTraps: Boolean,
     useCxxExceptions: Boolean,
     /** ABI alignment (in bytes) of 8-byte scalars (`i64`/`double`) inside
-     *  aggregates, as defined by the LLVM data layout of the target. It is 8
-     *  everywhere except on 32-bit x86 (non-Windows), whose SysV ABI packs them
-     *  with 4-byte alignment. Must match LLVM, otherwise the sizes computed by
-     *  [[MemoryLayout]] (used for allocation) disagree with the struct layout
-     *  used by the emitted `getelementptr`/`store` instructions.
+     *  aggregates, as defined by the LLVM data layout of the target. The opt-in
+     *  APCS profile uses four-byte alignment on 32-bit ARM. Must match LLVM,
+     *  otherwise [[MemoryLayout]] and emitted aggregate accesses diverge.
      */
     alignOfLong: Int
 ) {
@@ -35,7 +33,8 @@ private[scalanative] object PlatformInfo {
     alignOfLong = alignOfLong(
       arch = config.compilerConfig.configuredOrDetectedTriple.arch,
       is32Bit = config.compilerConfig.is32BitPlatform,
-      targetsWindows = config.targetsWindows
+      targetsWindows = config.targetsWindows,
+      agbccAbi = config.compilerConfig.agbccAbi
     )
   )
 
@@ -44,13 +43,16 @@ private[scalanative] object PlatformInfo {
    *  alignment 4) and `f64:32:64`. E.g. `armv4t-none-eabi`:
    *  `e-m:e-p:32:32-Fi8-i64:64-...`, `i386-linux-gnu`:
    *  `e-m:e-p:32:32-...-f64:32:64-...`, `i686-w64-mingw32`: `...-i64:64-...`.
+   *  Passing `-mabi=apcs-gnu` changes ARM to four-byte ABI alignment for both.
    */
   def alignOfLong(
       arch: String,
       is32Bit: Boolean,
-      targetsWindows: Boolean
+      targetsWindows: Boolean,
+      agbccAbi: Boolean = false
   ): Int =
-    if (!is32Bit) 8
+    if (agbccAbi) 4
+    else if (!is32Bit) 8
     else if (arch == TargetTriple.Arch.x86 && !targetsWindows) 4
     else 8
 }

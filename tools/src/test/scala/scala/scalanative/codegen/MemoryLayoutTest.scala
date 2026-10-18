@@ -17,7 +17,8 @@ class MemoryLayoutTest {
   private def platform(
       arch: String,
       is32Bit: Boolean,
-      windows: Boolean = false
+      windows: Boolean = false,
+      agbccAbi: Boolean = false
   ) =
     PlatformInfo(
       targetTriple = None,
@@ -27,10 +28,11 @@ class MemoryLayoutTest {
       useOpaquePointers = true,
       useGCYieldPointTraps = false,
       useCxxExceptions = false,
-      alignOfLong = PlatformInfo.alignOfLong(arch, is32Bit, windows)
+      alignOfLong = PlatformInfo.alignOfLong(arch, is32Bit, windows, agbccAbi)
     )
 
   private val arm32 = platform("arm", is32Bit = true)
+  private val arm32Apcs = platform("arm", is32Bit = true, agbccAbi = true)
   private val riscv32 = platform("riscv32", is32Bit = true)
   private val x86 = platform("i386", is32Bit = true)
   private val x86win = platform("i386", is32Bit = true, windows = true)
@@ -46,6 +48,7 @@ class MemoryLayoutTest {
     assertEquals(4, x86.alignOfLong)
     assertEquals(8, x86win.alignOfLong)
     assertEquals(8, x86_64.alignOfLong)
+    assertEquals(4, arm32Apcs.alignOfLong)
   }
 
   @Test def alignmentOfLongAndDouble(): Unit = {
@@ -64,6 +67,15 @@ class MemoryLayoutTest {
     assertEquals(24L, armLayout.size)
     assertEquals(Seq(0L, 4L, 8L, 16L), armLayout.tys.map(_.offset))
     assertEquals(16L, MemoryLayout(dbl)(arm32).size)
+    // `-mabi=apcs-gnu`: i64 ABI alignment becomes 4, so the same structs
+    // use the classic GBA layout (`{ptr, i1, ptr, i64}` = 20 bytes).
+    val armApcsLayout = MemoryLayout(tys)(arm32Apcs)
+    assertEquals(20L, armApcsLayout.size)
+    assertEquals(Seq(0L, 4L, 8L, 12L), armApcsLayout.tys.map(_.offset))
+    assertEquals(
+      12L,
+      MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(arm32Apcs).size
+    )
     assertEquals(
       16L,
       MemoryLayout(Seq(Ptr, Int, Int, ArrayValue(Long, 0)))(arm32).size

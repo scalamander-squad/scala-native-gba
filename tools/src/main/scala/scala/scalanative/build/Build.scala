@@ -180,7 +180,10 @@ object Build {
       /* Finds all the libraries on the classpath that contain native
        * code and then compiles them.
        */
-      val compileNativeLibs = findAndCompileNativeLibraries(config, analysis)
+      val compileNativeLibs =
+        if (config.compilerConfig.compileNativeLibraries)
+          findAndCompileNativeLibraries(config, analysis)
+        else Future.successful(Seq.empty)
 
       Future.reduceLeft(
         immutable.Seq(compileGeneratedIR, compileNativeLibs)

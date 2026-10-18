@@ -9,8 +9,8 @@ freestanding ARM7TDMI code, while progressively matching agbcc's instruction sel
 game ROMs. Matching output is an active compiler objective, not a capability of the current LLVM-based default.
 
 - **Base:** upstream Scala Native `main` after v0.5.12 (version `0.5.13-SNAPSHOT`, the sbt 2 build), merged in
-  with its full history. The current toolchain is **`0.5.13-gba9`** (tag `v0.5.13-gba9`, originally based on
-  upstream `c25d3c520`; later upstream main commits are merged on the fork branch).
+  with its full history. The current working build version is **`0.5.13-gba10`** (local, not yet tagged; originally
+  based on upstream `c25d3c520`, with later upstream main commits merged on the fork branch).
 - **Branch `main`:** our commits on top of v0.5.12, with upstream merged in by merge commits. Each stage is tagged:
   `v0.5.12-gba1` … `v0.5.12-gba6` (on v0.5.12), then `v0.5.13-gba7` (the first upstream merge),
   `v0.5.13-gba8` (upstream catch-up; the scalafmt reformat in the "main branch and stage tags" commit is formatting
@@ -28,6 +28,9 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     with a strict array-immutability analysis.
   - Freestanding runtime trims: no system property / environment / case tables, no box caches, empty stack traces
     on targets without an OS.
+  - `NativeConfig.withCompileNativeLibraries(false)` lets a static-library build use a custom target runtime without
+    compiling the classpath libraries' native C/assembly sources. The default remains `true`; the xlat and GBA test-ROM
+    drivers opt out because they supply their own GBA runtime.
   - Single-threaded / freestanding guards (needed since upstream's threading rework): the exported thread start routine
     runs threads only when multithreading is enabled, single-threaded builds allocate no pthread state, and
     freestanding targets skip the C `ThreadInfo` writes at start-up and shutdown. Multithreaded builds are unchanged.
@@ -40,20 +43,30 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
   - An experimental, separate `NativeConfig.withAgbccCodegen(true)` path generates code from
     lowered Scala Native NIR through the game's actual agbcc compiler. It is opt-in, GBA-target-only, and requires
     `AGBCC` to point to agbcc; it also disables incremental compilation and LTO. The current emitter handles a
-    deliberately narrow NIR subset (scalar and aggregate-by-value signatures, stack allocation, typed element-address
+    deliberately narrow NIR subset (scalar and aggregate-by-value signatures, stack allocation, ordered volatile scalar
+    accesses, nested aggregate constants with static storage, typed element-address
     calculations for nested struct/array paths, integer/bitwise and basic floating arithmetic operations,
     non-exceptional signed and unsigned division and remainder, integer comparisons (including unsigned 8/16-bit
     operands), pointer/reference equality,
     conversions and same-width float/integer bitcasts, direct and typed indirect calls, C varargs call sites, `sizeof`, `alignof`, aggregate extraction and
     insertion for literal struct/array paths,
-    and simple label/branch/switch control flow with unreachable terminals). Unsupported
-    operations fail explicitly. Other functions still use LLVM, so this is a mixed backend experiment rather than a
-    whole-program agbcc compiler. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
-    symbols through this backend while other functions stay on LLVM; use `.withAgbccCodegen(true)` to attempt all
-    exports (unsupported NIR fails the build). Supported operations include scalar 8/16/32/64-bit integer
+    unordered scalar loads, and simple label/branch/switch control flow with unreachable terminals). Unsupported
+    operations fail explicitly. An export filter keeps unrelated functions on LLVM; unfiltered mode selects every
+    lowered method body. Use `.withAgbccCodegenExports(Set("symbol"))` to route only named exported C
+    symbols through this backend together with their reachable NIR callees, including methods referenced through
+    function pointers in method bodies and transitively referenced global initializers
+    (including dispatch tables), while unrelated functions stay
+    on LLVM; `.withAgbccCodegenExportOrder(Seq(...))` preserves the selected root definition order in the emitted
+    object. With no export filter, `.withAgbccCodegen(true)` sends every lowered NIR method body through agbcc,
+    including methods outside the export reference graph; unsupported NIR fails the build. Global data still uses
+    LLVM's data emission, while instruction generation in this mode is entirely agbcc.
+    The GBA test ROM's `AGBCC_CODEGEN_ALL=1 AGBCC_EHABI_FRAMES=1` mode enforces that no function definitions
+    remain in LLVM IR. It also exercises inline stack save/restore, 32/64-bit trailing-zero counts, decimal logarithms,
+    absolute values, and the freestanding runtime initialization path. Its C runtime/newlib support remains external
+    native code; this mode does not claim byte identity with the original game's instructions. Supported operations include scalar 8/16/32/64-bit integer
     signatures, integer arithmetic/bitwise operations, basic floating arithmetic, finite literals and IEEE NaN/infinity,
     non-exceptional signed and unsigned integer division and remainder, integer and floating comparisons, pointer/reference equality,
-    shifts, conversions and same-width float/integer bitcasts, stack allocation, compiler memory fences, ordered scalar atomic loads/stores, typed element-address calculations for nested struct/array paths, direct
+    shifts, conversions and same-width float/integer bitcasts, stack allocation, compiler memory fences, ordered scalar loads/stores, typed element-address calculations for nested struct/array paths, direct
     calls, typed indirect calls, C varargs call sites, external scalar/aggregate global references, scalar and aggregate
     loads/stores, by-value aggregate
     signatures, aggregate extraction/insertion, `sizeof`/`alignof`, and label/branch/switch control flow with
@@ -62,24 +75,49 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
     Int-backed `Random()`/`SeedRng(Int)` implementations through NIR, linking, optimization/lowering, and agbcc with
     explicit `u16` C ABI signatures via `.withAgbccCodegenExportSignatures`. This preserves the narrow external
     signature while Scala keeps using Int to represent unsigned C integers. Their emitted `.text` bytes and relocations
-    match an independently authored C oracle,
-    as do additional integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
+    match an independently authored C oracle. A separate local probe against the current xlat classpath also routed its
+    actual translated `Random`/`SeedRng` definitions through this backend: their generated instruction bytes match
+    stock `random.o` exactly (26 bytes for `Random`, 16 for `SeedRng`). The xlat driver and build script now expose
+    this path with `AGBCC_CODEGEN_EXPORTS=Random,SeedRng,SeedRng2,Random2` and `AGBCC_CODEGEN_RNG_ABI=1`; the list
+    defines the C source definition order. A focused pipeline generated its agbcc object, linked the translated objects,
+    and emitted the expected veneers. All four function symbols now have the same offsets and sizes as stock `random.o`,
+    and the entire 116-byte `.text` section (including literal pools and padding) matches after masking relocation words.
+    A subsequent complete-game relink using these four generated RNG functions and the original C data declarations
+    matched every one of the stock ROM's 16,777,216 bytes, including final state addresses. Every other game translation
+    unit remained stock C/assembly; this does not establish whole-game Scala parity. The xlat
+    driver now passes the ARM newlib sysroot to clang and skips bundled native C/assembly compilation while using its
+    project runtime; driver errors are fatal. The current pipeline reaches partial linking and emits veneers. A full
+    manifest build reaches the game linker but fails on undefined functions from translations that are still in progress
+    (EWRAM 98.56%, IWRAM 94.27% before link failure), so whole-ROM identity is not established. Additional emitted `.text` bytes and relocations
+    match independent C oracles for integer arithmetic, all four 32-bit signed/unsigned division and remainder operations,
     pointer equality/inequality, zero-extended unsigned 8/16-bit comparisons, sign-aware narrow signed division,
     remainder, comparisons, and shifts, struct-field address calculation,
     64-bit addition, external aggregate global element addresses, single/double floating operations and a float literal,
     aggregate loads/stores and zero initialization, indirect and variadic calls, float/double remainder call emission,
     bitwise logic, all shift variants,
-    32-bit float/integer and 64-bit double/long bitcasts, compiler fences, and scalar atomic access,
+    32-bit float/integer and 64-bit double/long bitcasts, compiler fences, and ordered scalar accesses,
     signed/unsigned comparisons, and branch fixtures. Floating remainder emits a local fdlibm-derived shift/subtract
     helper because the classic agbcc ROM link (`-lgcc -lc`) does not provide `fmodf`/`fmod`; tests compare it with the
     host C library across 4,096 deterministic input pairs per precision plus explicit subnormal, signed-zero,
     infinity, and zero-divisor cases.
-    Variadic function definitions are still rejected. Atomic loads/stores are limited to scalar types no wider than
-    32 bits; acquire/release
-    ordering uses compiler memory clobbers, which emit no ARM7TDMI instructions. An 8-bit unsigned division check also verifies
-    that operands are zero-extended before division. These checks establish a narrow real-NIR-to-agbcc path; general
-    aggregate and runtime lowering, broader NIR coverage, and ROM-level
-    byte identity remain active work. The option is not yet a supported route to byte-identical ROMs. Build
+    Variadic function definitions are still rejected. Ordered loads/stores use volatile scalar accesses, including
+    64-bit values, and acquire/release ordering uses compiler memory clobbers that emit no ARM7TDMI instructions.
+    This path is for the fork's single-threaded GBA target and does not provide concurrent atomicity. An 8-bit unsigned division check also verifies
+    that operands are zero-extended before division. The unfiltered backend now also compiles the full GBA runtime
+    test program's lowered methods, with LLVM retained for global data. Broader NIR coverage and byte identity for
+    the translated game as a whole remain active work. A new real-NIR probe routed translated `Sin` and `Cos` through agbcc with
+    `AGBCC_CODEGEN_EXPORTS=Sin,Cos` and signed 16-bit C ABI overrides. The emitted 60-byte `.text` prefix matches
+    stock `trig.o` byte-for-byte (SHA-256 `ef03c58f38d6150438b40fe3ab22a33738ca754f50d4bd4be7f5a765dd231520`),
+    and both `R_ARM_ABS32 gSineTable` relocations match at offsets `0x18` and `0x38`. This exercised the
+    `__xlat_addr_<symbol>` address-cell lowering, non-volatile unordered table reads, and scheduling of independent
+    multiply operands ahead of the table access. It establishes exact code generation for these two functions only;
+    it does not establish whole-object or ROM identity. Focused address-load tests now pass **5/5** on Scala 2.13.
+    A four-export `Sin`/`Cos`/`Sin2`/`Cos2` probe confirms volatile table reads lower to inline `ldrh` instructions,
+    and `Sin2` materializes its table address after the division helpers. Its bytes still differ from stock agbcc:
+    `Sin2` still differs in register allocation, narrowing, branches and literal placement. The current game translation
+    keeps an explicit `Cos2` call to `Sin2`, but that does not resolve the whole-object layout difference. `Sin`/`Cos`
+    remain the exact trig functions. The option is not yet a supported route to
+    byte-identical ROMs. Build
     environments must set `AGBCC` and provide `ARM_AS` or `arm-none-eabi-as`. The parity test is
     `toolsJVM3/Test/testOnly scala.scalanative.codegen.llvm.AgbccCodeGenTest` with `AGBCC`, `ARM_AS`,
     `ARM_OBJCOPY`, and `ARM_READELF` configured.
@@ -111,8 +149,42 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
   (needs `cs`, a JDK, `clang`, Arm GNU `arm-none-eabi-*` with newlib-nano, and a libmgba 0.10 build: `MGBA_SRC`,
   `MGBA_BUILD`, `MGBA_LIBS`); `run.sh` exits non-zero unless the verdict is PASS. `ROMDATA=0 gba-testrom/build.sh`
   disables the ROM-data pass and must make the romdata checks fail. The upstream-sync workflow runs it on every clean
-  merge and puts the verdict in the PR. ROMs are never published: `gba-testrom/out/`, `*.gba` and `*.elf` are ignored,
-  and CI uploads no artifacts.
+  merge and puts the verdict in the PR. The current default LLVM ROM boots with **38 passed, 0 failed** checks.
+  ROMs are never published: `gba-testrom/out/`, `*.gba` and `*.elf` are ignored,
+  and CI uploads no artifacts. Locally, after a `publishLocal`, `AGBCC_CODEGEN=1 AGBCC=/path/to/agbcc JOBS=1
+  gba-testrom/build.sh && ROM=out/agbc-probe.gba gba-testrom/run.sh` also builds a standalone probe ROM. It routes
+  the Int-backed `gbatest_agbcc_u16` export through the agbcc backend with a `u16` C ABI override, assembles that
+  generated C as a Thumb object, and checks two calls through the boundary at boot. This is a real-ROM integration
+  smoke test for one exported function, not whole-ROM byte identity.
+  `AGBCC_CODEGEN_GRAPH=1` routes an exported loop and its private Scala helper through agbcc; the GBA ROM executes the
+  call graph and reports `PASS agbcc.app-call-graph`. The current graph-mode ROM passes all **38** runtime checks,
+  including the APCS layout and EHABI exception cases.
+  `AGBCC_CODEGEN_APP=1` is an opt-in diagnostic that routes the test ROM's main export and reachable NIR callees
+  through agbcc; unrelated definitions remain LLVM-generated (the current build emits 26 LLVM IR modules alongside
+  the agbcc translation unit). Reproduce the full-app run with `AGBCC_CODEGEN_APP=1 AGBCC_EHABI_FRAMES=1
+  AGBCC=/path/to/agbcc JOBS=1 gba-testrom/build.sh && ROM=out/testrom.gba gba-testrom/run.sh`.
+  The driver fixes the selected root order, and runtime class/trait IDs are assigned in canonical symbol order.
+  This fixes observed run-to-run output drift from nondeterministic linker-map/set iteration. Two clean builds with
+  identical inputs produced byte-identical agbcc `.text` and byte-identical 1,130,384-byte ROM images (ROM SHA-256
+  `6db3e71b28237ca03335594255186852f766d040ba51212128eeef69303cece8`); mGBA passed all **47/47** checks on the
+  second image. This proves reproducibility for this mixed-backend test ROM, not equality with a stock agbcc build.
+  Exceptional NIR edges emit EHABI call-site and landing-pad markers for the metadata pass; without
+  `AGBCC_EHABI_FRAMES=1`, the app ROM halts at the first exception because agbcc provides no unwind tables. With
+  the frame/LSDA pass enabled, the rebuilt full-app ROM passes **47/47** checks. The APCS profile uses four-byte Long/Double aggregate
+  alignment to match the classic toolchain (the default EABI profile retains eight-byte alignment). Coverage includes
+  Long/Double fields and arrays, IEEE Double constants and arithmetic, Double array reads and boxing/string
+  conversion, ROM-resident module data, and all exception cases. The focused current compiler tests pass **43/43**;
+  the latest full JVM tools suite passed **145 tests, 1 ignored**. This confirms runtime behavior for the exercised app graph; matching the emitted
+  instruction stream and producing a byte-identical ROM remain separate goals.
+  The bundled agbcc 2.9 also emits no `.ARM.exidx`/`.ARM.extab` for a C caller with either `-fexceptions` or
+  `-fsjlj-exceptions`, and its bundled `libgcc.a`/`libc.a` expose no `setjmp`/`longjmp`; exception support therefore
+  needs explicit frame metadata or a runtime protocol implemented for this target. The test-ROM build has an opt-in
+  `AGBCC_EHABI_FRAMES=1` pass that adds frame-only `.ARM.exidx` recipes for agbcc prologues with saved registers and
+  fixed stack allocation; object checks confirm it leaves `.text` unchanged. Exceptional NIR operation edges emit marker
+  labels which this pass converts to catch-all `.ARM.extab` LSDA call-site tables for `scalanative_personality`.
+  The frame parser still rejects prologues it cannot describe, including frame-pointer and dynamic-stack functions.
+  Run its parser tests with
+  `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s gba-testrom/tools -p 'test_*.py'`.
   `gba-testrom/abi/check-agbcc-abi.sh` is a separate mixed-compiler ROM check; it needs the game agbcc binary in
   `AGBCC` and verifies calls in both directions across six fixed arguments, a 64-bit value, a by-value struct,
   varargs and a struct return. Its linker suppresses EABI attribute mismatch diagnostics because agbcc and Clang
@@ -120,3 +192,17 @@ game ROMs. Matching output is an active compiler objective, not a capability of 
   claiming those metadata labels agree.
 - **Licence:** Apache-2.0, as upstream (see `LICENSE.md`); our changes are offered under the same licence.
 - Fixes that are generally useful are intended to be proposed upstream following the project's contribution rules.
+
+
+### ARM arithmetic and ABI validation (2026-10-18)
+
+The agbcc emitter recognizes explicit `__xlat_sdiv32` / `__xlat_sdiv64` calls as signed C division with the game's
+bundled libgcc behavior: zero divisors return zero and minimum signed value divided by -1 wraps. These markers
+avoid introducing JVM division checks into code whose original C relies on that ARM behavior. A ten-check mGBA
+probe includes zero, overflow, truncation and wide results; six independent fault injections fail as expected.
+The application LLVM post-pass lowers these markers to the original libgcc helpers instead of LLVM `sdiv`, whose
+zero/overflow cases would be poison. Applications using these markers must supply that matching runtime.
+
+The current 132-unit game links with every lowered method through agbcc; its ordinary runtime/veneer layout is
+still different from stock. Byte-identical whole-ROM generation is unfinished. The companion application's ABI
+extractor derives integer signatures from original agbcc DWARF and excludes unsupported pointer/aggregate shapes.

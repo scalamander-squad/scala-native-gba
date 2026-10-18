@@ -36,11 +36,16 @@ sealed trait NativeConfig {
   /** Use agbcc's four-byte APCS stack/call ABI for GBA Thumb targets. */
   def agbccAbi: Boolean
 
-  /** Generate the supported lowered-NIR subset as C for agbcc. */
+  /** Generate lowered NIR method bodies as C for agbcc (all bodies unless
+   *  exports are filtered).
+   */
   def agbccCodegen: Boolean
 
   /** When non-empty, route only these exported C symbol names to agbcc. */
   def agbccCodegenExports: Set[String]
+
+  /** Optional definition order for the selected exported C symbols. */
+  def agbccCodegenExportOrder: Seq[String]
 
   /** C ABI signatures that override the Scala-level signatures of exports. */
   def agbccCodegenExportSignatures: Map[String, nir.Type.Function]
@@ -56,6 +61,12 @@ sealed trait NativeConfig {
 
   /** Build target for current compilation */
   def buildTarget: BuildTarget
+
+  /** Whether to compile native C/assembly sources shipped by classpath
+   *  libraries. Disable this when the final link supplies a target-specific
+   *  runtime.
+   */
+  def compileNativeLibraries: Boolean
 
   /** Shall linker check that NIR is well-formed after every phase? */
   def check: Boolean
@@ -249,6 +260,9 @@ sealed trait NativeConfig {
   /** Create a new config with given build target */
   def withBuildTarget(target: BuildTarget): NativeConfig
 
+  /** Compile native C/assembly sources shipped by classpath libraries. */
+  def withCompileNativeLibraries(value: Boolean): NativeConfig
+
   /** Create a new config with given check value. */
   def withCheck(value: Boolean): NativeConfig
 
@@ -339,6 +353,11 @@ sealed trait NativeConfig {
   /** Limit the experimental agbcc backend to named exported C symbols. */
   def withAgbccCodegenExports(value: Set[String]): NativeConfig
 
+  /** Preserve the requested source order of selected exports in the agbcc
+   *  object.
+   */
+  def withAgbccCodegenExportOrder(value: Seq[String]): NativeConfig
+
   /** Override the C ABI signatures of selected exported symbols. This is useful
    *  when Scala uses a wider primitive to represent a C integer type (for
    *  example, an Int-backed u16) but the external ABI must remain narrow.
@@ -346,6 +365,7 @@ sealed trait NativeConfig {
   def withAgbccCodegenExportSignatures(
       value: Map[String, nir.Type.Function]
   ): NativeConfig
+
 }
 
 object NativeConfig {
@@ -367,11 +387,13 @@ object NativeConfig {
       agbccAbi = false,
       agbccCodegen = false,
       agbccCodegenExports = Set.empty,
+      agbccCodegenExportOrder = Seq.empty,
       agbccCodegenExportSignatures = Map.empty,
       gc = GC.default,
       lto = LTO.default,
       mode = Mode.default,
       buildTarget = BuildTarget.default,
+      compileNativeLibraries = true,
       check = false,
       checkFatalWarnings = false,
       checkFeatures = true,
@@ -403,11 +425,13 @@ object NativeConfig {
       agbccAbi: Boolean,
       agbccCodegen: Boolean,
       agbccCodegenExports: Set[String],
+      agbccCodegenExportOrder: Seq[String],
       agbccCodegenExportSignatures: Map[String, nir.Type.Function],
       gc: GC,
       lto: LTO,
       mode: Mode,
       buildTarget: BuildTarget,
+      compileNativeLibraries: Boolean,
       check: Boolean,
       checkFatalWarnings: Boolean,
       checkFeatures: Boolean,
@@ -478,6 +502,14 @@ object NativeConfig {
         useIncrementalCompilation = false
       )
 
+    def withAgbccCodegenExportOrder(value: Seq[String]): NativeConfig =
+      copy(
+        agbccCodegenExportOrder = value,
+        agbccCodegen = true,
+        agbccAbi = true,
+        useIncrementalCompilation = false
+      )
+
     def withAgbccCodegenExportSignatures(
         value: Map[String, nir.Type.Function]
     ): NativeConfig =
@@ -490,6 +522,9 @@ object NativeConfig {
 
     def withBuildTarget(target: BuildTarget): NativeConfig =
       copy(buildTarget = target)
+
+    def withCompileNativeLibraries(value: Boolean): NativeConfig =
+      copy(compileNativeLibraries = value)
 
     def withGC(value: GC): NativeConfig =
       copy(gc = value)
@@ -609,6 +644,7 @@ object NativeConfig {
           | - agbccCodegen:            $agbccCodegen
           | - agbccCodegenExports:     ${agbccCodegenExports.toSeq.sorted
            .mkString(", ")}
+          | - agbccCodegenExportOrder: ${showSeq(agbccCodegenExportOrder)}
           | - agbccCodegenExportSignatures: ${agbccCodegenExportSignatures.toSeq
            .sortBy(_._1)
            .mkString(", ")}
@@ -616,6 +652,7 @@ object NativeConfig {
           | - LTO:                     $lto
           | - mode:                    $mode
           | - buildTarget              $buildTarget
+          | - compileNativeLibraries:  $compileNativeLibraries
           | - check:                   $check
           | - checkFatalWarnings:      $checkFatalWarnings
           | - checkFeatures            $checkFeatures

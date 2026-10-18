@@ -496,16 +496,45 @@ private[scalanative] final class StaticInit(
     }
   }
 
-  // Fields stored outside constructors (whole program), used by the
+  // Fields written outside initialization of the constructor receiver, used by the
   // immutability check: an object may live in ROM only if nothing can write it.
   private lazy val storedOutsideCtor
       : Map[nir.Global.Member, nir.Global.Member] = {
     val out = mutable.HashMap.empty[nir.Global.Member, nir.Global.Member]
     analysis.defns.foreach {
-      case nir.Defn.Define(_, name, _, insts, _) if !name.sig.isCtor =>
+      case nir.Defn.Define(_, name, _, insts, _) =>
+        // A constructor may initialize its own receiver, but can also mutate
+        // an already existing object (notably its companion module). Exempting
+        // every constructor freezes such mutable state into ROM.
+        val constructedReceivers = mutable.HashSet.empty[nir.Local]
+        if (name.sig.isCtor) insts.headOption.foreach {
+          case nir.Inst.Label(_, receiver +: _) =>
+            constructedReceivers += receiver.id
+          case _ => ()
+        }
+        def initializesReceiver(obj: nir.Val): Boolean = obj match {
+          // The same SSA local can carry refined reference types at its uses.
+          case nir.Val.Local(id, _) => constructedReceivers(id)
+          case _                    => false
+        }
         insts.foreach {
-          case nir.Inst.Let(_, nir.Op.Fieldstore(_, _, fld, _), _) =>
+          // Module constructors can access their receiver through Op.Module
+          // instead of the explicit this parameter. This is the same singleton,
+          // whereas a companion *class* constructor has a different owner.
+          case nir.Inst.Let(id, nir.Op.Module(module), _)
+              if name.sig.isCtor && module == name.owner =>
+            constructedReceivers += id
+          case nir.Inst.Let(id, nir.Op.Copy(obj), _)
+              if initializesReceiver(obj) =>
+            constructedReceivers += id
+          case nir.Inst.Let(id, nir.Op.As(_, obj), _)
+              if initializesReceiver(obj) =>
+            constructedReceivers += id
+          case nir.Inst.Let(_, nir.Op.Fieldstore(_, obj, fld, _), _)
+              if !initializesReceiver(obj) =>
             if (!out.contains(fld)) out(fld) = name
+          // Taking an address can escape even from a constructor; unlike a
+          // direct store this is not evidence of initialization alone.
           case nir.Inst.Let(_, nir.Op.Field(_, fld), _) =>
             if (!out.contains(fld)) out(fld) = name
           case _ => ()

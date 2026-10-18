@@ -161,6 +161,25 @@ private[scalanative] object LLVM {
     if (compileResult != 0)
       throw new BuildException(s"agbcc failed to compile ${srcPath}")
 
+    val assemblyFile = java.nio.file.Paths.get(asmPath)
+    val assembly = new String(
+      java.nio.file.Files.readAllBytes(assemblyFile),
+      java.nio.charset.StandardCharsets.UTF_8
+    )
+    val resolved = AgbccStackFrames.rewrite(assembly)
+    val sourceHash = java.security.MessageDigest
+      .getInstance("SHA-256")
+      .digest(
+        java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(srcPath))
+      )
+      .map(byte => f"${byte & 0xff}%02x")
+      .mkString
+    java.nio.file.Files.write(
+      assemblyFile,
+      (s"@ sn_agbcc_source_sha256 $sourceHash\n" + resolved)
+        .getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    )
+
     val assembleCommand =
       Seq(assembler, "-mcpu=arm7tdmi", "-o", objPath, asmPath)
     config.logger.running(assembleCommand)

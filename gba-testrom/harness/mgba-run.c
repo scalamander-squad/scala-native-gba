@@ -14,11 +14,13 @@
 
 #define RESULT 0x0203FFF0u
 static int otherLines;
+static int invalidMemoryWrites;
 
 static void logCb(struct mLogger* l, int category, enum mLogLevel level, const char* fmt, va_list args) {
 	(void) l; (void) level;
 	char buf[512];
 	vsnprintf(buf, sizeof buf, fmt, args);
+	if (strstr(buf, "Unimplemented memory Store")) ++invalidMemoryWrites;
 	if (strstr(mLogCategoryName(category), "Debug")) printf("[rom] %s\n", buf);
 	else if (otherLines++ < 20) printf("[mgba %s] %s\n", mLogCategoryName(category), buf);
 	fflush(stdout);
@@ -47,9 +49,9 @@ int main(int argc, char** argv) {
 		if (core->busRead32(core, RESULT) == 0x54524F4Du && verdict) break;
 	}
 	uint32_t magic = core->busRead32(core, RESULT), passed = core->busRead32(core, RESULT + 4), failed = core->busRead32(core, RESULT + 8);
-	int pass = magic == 0x54524F4Du && verdict == 0x50415353u && failed == 0 && passed > 0;
+	int pass = magic == 0x54524F4Du && verdict == 0x50415353u && failed == 0 && passed > 0 && invalidMemoryWrites == 0;
 	printf("result block: magic=%08x passed=%u failed=%u verdict=%08x after %d frames\n", magic, passed, failed, verdict, f + 1);
-	printf("VERDICT: %s\n", pass ? "PASS" : magic != 0x54524F4Du ? "FAIL (runtime never started)" : verdict ? "FAIL" : "FAIL (no verdict: hung or crashed)");
+	printf("VERDICT: %s\n", pass ? "PASS" : invalidMemoryWrites ? "FAIL (unimplemented memory write)" : magic != 0x54524F4Du ? "FAIL (runtime never started)" : verdict ? "FAIL" : "FAIL (no verdict: hung or crashed)");
 	core->deinit(core);
 	free(video);
 	return pass ? 0 : 1;

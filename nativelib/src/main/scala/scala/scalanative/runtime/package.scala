@@ -59,11 +59,12 @@ package object runtime {
       argc: Int,
       rawargv: RawPtr
   ): scala.Array[String] = {
-    NativeThread.TLS.setupCurrentThreadInfo(
-      stackBottom = Intrinsics.stackalloc[Byte](),
-      isMainThread = true,
-      stackSize = 0 /* detect */
-    )
+    if (!scala.scalanative.meta.LinktimeInfo.isFreestanding)
+      NativeThread.TLS.setupCurrentThreadInfo(
+        stackBottom = Intrinsics.stackalloc[Byte](),
+        isMainThread = true,
+        stackSize = 0 /* detect */
+      )
     StackOverflowGuards.setup(isMainThread = true)
 
     OutOfMemory.preallocateFallback()

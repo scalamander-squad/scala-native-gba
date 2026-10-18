@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 HERE="`dirname $0`"
 VERSION=$(sed -nre "s#[[:space:]]*version[^0-9]+([0-9.]+)#\1#p" $HERE/../.scalafmt.conf)
@@ -19,10 +19,10 @@ if [ ! -f $SCALAFMT ]; then
 fi
 
 if [[ "$CHECK_MODIFIED_ONLY" == "1" ]]; then
-  git diff --name-only main | \
-    grep -E '.*\.scala$' |
-    grep -E -v '^gba-testrom/' |
-    xargs "$SCALAFMT"
+  # NUL delimiters preserve paths with spaces; -r avoids formatting the entire
+  # repository when there are no changed Scala files. Keep --check/--test flags.
+  git diff --name-only -z --diff-filter=ACMR main -- '*.scala' |
+    xargs -0 -r "$SCALAFMT" "$@"
 else
   $SCALAFMT "$@"
 fi
